@@ -1,0 +1,22 @@
+{
+  "name": "slack-claude-bot",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "bun": ">=1.4.2"
+  },
+  "scripts": {
+    "start": "bun src/index.ts",
+    "test": "bun test",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@anthropic-ai/claude-agent-sdk": "^0.3.286",
+    "@slack/bolt": "^5.1.0"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.2",
+    "typescript": "^7.0.2"
+  }
+}

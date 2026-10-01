@@ -1,0 +1,13 @@
+{
+  "C0123456789": {
+    "cwd": "/abs/path/to/project",
+    "permissionMode": "bypassPermissions",
+    "disallowedTools": ["AskUserQuestion"],
+    "model": "claude-opus-5-5"
+  },
+  "C0987654321": {
+    "cwd": "/abs/path/to/another-project",
+    "permissionMode": "default",
+    "disallowedTools": []
+  }
+}
