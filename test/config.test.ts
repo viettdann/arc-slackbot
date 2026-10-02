@@ -129,6 +129,12 @@ describe('parseChannels', () => {
     expect(() => parseChannels({ C1: { cwd: workDir, disallowedTools: ['Bash', 1] } })).toThrow(/disallowedTools/);
   });
 
+  test('requireMention is stored only when false and must be a boolean', () => {
+    expect(parseChannels({ C1: { cwd: workDir, requireMention: true } }).C1).not.toHaveProperty('requireMention');
+    expect(parseChannels({ C1: { cwd: workDir, requireMention: false } }).C1?.requireMention).toBe(false);
+    expect(() => parseChannels({ C1: { cwd: workDir, requireMention: 'no' } })).toThrow(/requireMention/);
+  });
+
   test('direct key is accepted; other direct message channel IDs are rejected', () => {
     expect(parseChannels({ direct: { cwd: workDir } }).direct?.cwd).toBe(workDir);
     expect(() => parseChannels({ D0123: { cwd: workDir } })).toThrow(/"direct" key/);

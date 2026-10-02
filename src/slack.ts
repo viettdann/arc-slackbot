@@ -245,10 +245,13 @@ export class Controller {
       await this.#addressed(event, event.user);
       return;
     }
-    if (!event.thread_ts || event.thread_ts === event.ts) return;
     const text = (event.text ?? '').trim();
-    // Replies that mention the bot also arrive as app_mention and are handled there.
+    // Messages that mention the bot also arrive as app_mention and are handled there.
     if (text.replace(this.#mention, '') !== text) return;
+    if (!event.thread_ts || event.thread_ts === event.ts) {
+      if (!event.thread_ts && this.#d.channels.get(event.channel)?.requireMention === false) await this.#addressed(event, event.user);
+      return;
+    }
     if ((!text && !event.files?.length) || !this.#isKnownThread(event.channel, event.thread_ts)) return;
     await this.#threadReply(event.channel, event.thread_ts, await this.#prompt(text, event, event.thread_ts), event.ts, event.user);
   }
@@ -378,6 +381,7 @@ export class Controller {
       .map(([key, c]) => {
         const parts = [key === DIRECT_KEY ? 'Direct' : `<#${key}>`, `\`${c.cwd}\``, c.permissionMode];
         if (c.model) parts.push(c.model);
+        if (c.requireMention === false) parts.push('no mention needed');
         const m = membership.get(key);
         if (m && m.kind !== 'member') parts.push(`⚠️ ${membershipProblem(m)}`);
         const run = key === DIRECT_KEY ? this.#directRun() : this.#d.runner.byChannel(key);

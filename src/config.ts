@@ -24,7 +24,7 @@ export function parseChannels(raw: unknown): Record<string, ChannelConfig> {
   for (const [channelId, entry] of Object.entries(raw)) {
     if (channelId !== DIRECT_KEY && isDirectChannel(channelId)) throw new ConfigError(`channel ${channelId}: direct message channels are configured with the "${DIRECT_KEY}" key`);
     if (!isRecord(entry)) throw new ConfigError(`channel ${channelId}: entry must be an object`);
-    const { cwd, permissionMode = 'bypassPermissions', disallowedTools = [], model } = entry;
+    const { cwd, permissionMode = 'bypassPermissions', disallowedTools = [], model, requireMention = true } = entry;
     if (typeof cwd !== 'string' || cwd === '') throw new ConfigError(`channel ${channelId}: cwd is required`);
     if (!isAbsolute(cwd)) throw new ConfigError(`channel ${channelId}: cwd must be an absolute path`);
     if (!isDirectory(cwd)) throw new ConfigError(`channel ${channelId}: cwd ${cwd} is not an existing directory`);
@@ -37,11 +37,13 @@ export function parseChannels(raw: unknown): Record<string, ChannelConfig> {
     if (model !== undefined && (typeof model !== 'string' || model === '')) {
       throw new ConfigError(`channel ${channelId}: model must be a non-empty string`);
     }
+    if (typeof requireMention !== 'boolean') throw new ConfigError(`channel ${channelId}: requireMention must be a boolean`);
     channels[channelId] = {
       cwd,
       permissionMode: permissionMode as PermissionMode,
       disallowedTools: disallowedTools as string[],
       ...(model !== undefined ? { model: model as string } : {}),
+      ...(requireMention ? {} : { requireMention: false as const }),
     };
   }
   return channels;

@@ -8,6 +8,8 @@ export interface ChannelConfig {
   permissionMode: PermissionMode;
   disallowedTools: string[];
   model?: string;
+  /** Stored only when false; top-level messages then start runs without a mention. */
+  requireMention?: false;
 }
 
 export interface Config {

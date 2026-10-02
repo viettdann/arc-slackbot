@@ -62,6 +62,7 @@ cp channels.example.json channels.json
 | `permissionMode` | no | `bypassPermissions` (one of `default`, `acceptEdits`, `bypassPermissions`, `plan`, `dontAsk`, `auto`) |
 | `disallowedTools` | no | `[]` |
 | `model` | no | SDK default |
+| `requireMention` | no | `true` (`false` makes every top-level message in the channel a prompt, no mention needed; ignored for `"direct"`) |
 
 The special key `"direct"` takes the same fields and enables direct messages with the bot (see Usage); other keys starting with `D` are rejected.
 
@@ -78,7 +79,7 @@ pnpm start
 
 ## Usage
 
-- **Start a run**: mention the bot in a mapped channel, e.g. `@claude fix the failing tests`. The run starts in a thread with a live status message and a [Stop] button. The result is posted in the thread (as `result.md` when longer than 12,000 characters).
+- **Start a run**: mention the bot in a mapped channel, e.g. `@claude fix the failing tests`, or just post the prompt in a channel with `requireMention: false`. The run starts in a thread with a live status message and a [Stop] button. The result is posted in the thread (as `result.md` when longer than 12,000 characters).
 - **One run per channel and per folder**: mentioning the bot while a run is active in that channel, or in another channel mapped to the same folder (symlinks resolved), gets an ephemeral "Busy" reply with a link to the active thread.
 - **Direct messages**: with a `"direct"` entry in `channels.json`, every message you send the bot in its Messages tab is a prompt, no mention needed. Each top-level message starts a run in its own thread; reply in the thread to continue.
 - **Reactions** on the triggering message: 👀 accepted, ⏳ running, ✋ waiting for an answer, ✅ done, ❌ error, ⏹ stopped. Replies queued into a running run get 📨.

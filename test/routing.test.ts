@@ -351,6 +351,30 @@ describe('message routing', () => {
   });
 });
 
+describe('requireMention: false', () => {
+  beforeEach(() => {
+    ctx.channels.replace({ [CHANNEL]: { ...ctx.channel(), requireMention: false } });
+  });
+
+  test('a top-level message starts a run in its own thread', async () => {
+    await ctx.controller.onMessage({ channel: CHANNEL, user: OWNER, text: 'fix the bug', ts: '1100.0' });
+    expect(ctx.runner.byChannel(CHANNEL)).toMatchObject({ threadTs: '1100.0', prompt: 'fix the bug' });
+  });
+
+  test('a top-level mention is left to app_mention, other users and unknown threads are ignored', async () => {
+    await ctx.controller.onMessage({ channel: CHANNEL, user: OWNER, text: `<@${BOT}> hi`, ts: '1110.0' });
+    await ctx.controller.onMessage({ channel: CHANNEL, user: 'USTRANGER', text: 'hi', ts: '1110.1' });
+    await ctx.controller.onMessage({ channel: CHANNEL, user: OWNER, text: 'hi', ts: '1110.3', thread_ts: '1110.2' });
+    expect(ctx.runner.byChannel(CHANNEL)).toBeUndefined();
+  });
+
+  test('a top-level message in a channel that requires a mention is ignored', async () => {
+    ctx.channels.replace({ [CHANNEL]: ctx.channel() });
+    await ctx.controller.onMessage({ channel: CHANNEL, user: OWNER, text: 'fix the bug', ts: '1120.0' });
+    expect(ctx.runner.byChannel(CHANNEL)).toBeUndefined();
+  });
+});
+
 describe('run presentation', () => {
   test('reactions go eyes, hourglass, raised hand, hourglass, check in order', async () => {
     await ctx.controller.onAppMention({ channel: CHANNEL, user: OWNER, text: `<@${BOT}> go`, ts: '900.0' });
