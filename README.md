@@ -25,7 +25,7 @@ A Slack bot built on the Claude Agent SDK. Mentioning the bot in a configured ch
 
 ### 3. Invite the bot
 
-Run `/invite @<bot>` in every channel you map in `channels.json`.
+Run `/invite @<bot>` in every channel you map in `channels.json`. At startup and after a reload the bot logs a warning for every mapped channel it is not a member of.
 
 ### 4. Log in to Claude
 
@@ -63,7 +63,11 @@ cp channels.example.json channels.json
 | `disallowedTools` | no | `[]` |
 | `model` | no | SDK default |
 
+The special key `"direct"` takes the same fields and enables direct messages with the bot (see Usage); other keys starting with `D` are rejected.
+
 Startup validates every field and fails on the first invalid entry. Set `disallowedTools: ["AskUserQuestion"]` to keep the agent from asking questions in that channel.
+
+Edits to `channels.json` are picked up automatically, or with `/claude reload`. An invalid file keeps the previous mapping. Active runs keep the config they started with.
 
 ### 6. Install and run
 
@@ -75,14 +79,17 @@ bun start
 ## Usage
 
 - **Start a run**: mention the bot in a mapped channel, e.g. `@claude fix the failing tests`. The run starts in a thread with a live status message and a [Stop] button. The result is posted in the thread (as `result.md` when longer than 12,000 characters).
-- **One run per channel**: mentioning the bot while a run is active gets an ephemeral "Busy" reply with a link to the active thread.
+- **One run per channel and per folder**: mentioning the bot while a run is active in that channel, or in another channel mapped to the same folder (symlinks resolved), gets an ephemeral "Busy" reply with a link to the active thread.
+- **Direct messages**: with a `"direct"` entry in `channels.json`, every message you send the bot in its Messages tab is a prompt, no mention needed. Each top-level message starts a run in its own thread; reply in the thread to continue.
 - **Reactions** on the triggering message: 👀 accepted, ⏳ running, ✋ waiting for an answer, ✅ done, ❌ error, ⏹ stopped. Replies queued into a running run get 📨.
 - **Stop**: press [Stop] on the status message.
 - **Add instructions / resume**: reply in the thread. During a run, the reply is queued as a further turn (📨). After the run ends, a reply resumes the same session. Sessions survive bot restarts. Replies with attachments and replies also sent to the channel count too. Claude deletes session transcripts after `cleanupPeriodDays` (default 30 days); a reply to a thread whose transcript is gone gets an error instead of a run, and a new mention in the channel starts over.
 - **Attachments**: files attached to a mention or reply (up to 50 MB each) are downloaded to `<dir of DB_PATH>/files/<channel>/<thread>/` and their absolute paths are appended to the prompt, so the agent can read them. A file-only message is a valid prompt. An app installed before `files:read` was added to the manifest needs that scope added and the app reinstalled.
 - **Approvals and questions**: tool approval prompts ([Approve], [Always allow (session)], [Deny], [Deny + note…]) and `AskUserQuestion` prompts (options, "Other…", [Submit]) appear in the thread and wait until answered.
 - **`/claude status`**: lists active runs with elapsed time, state, and thread link.
-- **`/claude stop [#channel]`**: stops the active run in the current or given channel.
+- **`/claude stop [#channel|direct]`**: stops the active run in the current or given channel, or the direct message run.
+- **`/claude channels`**: lists the mapped channels with their folder, permission mode, model, membership warnings and active run.
+- **`/claude reload`**: reloads `channels.json` and reports what changed, or the validation error.
 - **App Home**: shows active runs (with [Stop]) and the last 20 runs.
 - **Crash recovery**: if the bot dies without a clean shutdown, the next start rewrites the status messages of the runs it left behind to "Interrupted" and replaces their reaction with ⏹. Buttons on messages of runs or prompts that are no longer active answer with an ephemeral "no longer active".
 - **Retention**: once at startup and then daily, finished runs and attachment folders older than `RETENTION_DAYS` are deleted. Thread-to-session mappings are kept.
@@ -90,6 +97,10 @@ bun start
 ### Permissions
 
 Runs have no turn, budget, or time limit. `bypassPermissions` (the default) runs every tool, including shell commands and file edits, in the mapped `cwd` without asking: only map folders the agent may modify. Set `"permissionMode": "default"` on a channel to get approval prompts in Slack instead.
+
+### Upgrading an installed app
+
+The manifest now requests `channels:read`, `groups:read` (membership check) and `im:history` with the `message.im` event and a writable Messages tab (direct messages). Update the app from `slack-manifest.yaml` and reinstall it; until then `/claude channels` reports a missing scope and direct messages do not reach the bot.
 
 ## Development
 

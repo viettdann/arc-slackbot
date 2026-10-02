@@ -1,5 +1,9 @@
 import { describe, expect, mock, test } from 'bun:test';
+import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import type { CanUseTool, Options, SDKMessage, SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { Channels } from '../src/channels.ts';
 import { BusyError, CwdMismatchError, NotConfiguredError, Runner, SessionMissingError, ShuttingDownError, type Run, type RunnerDeps } from '../src/runner.ts';
 import type { FinishedRun, NewRun } from '../src/store.ts';
 import type { ChannelConfig, ThreadRecord } from '../src/types.ts';
@@ -91,6 +95,7 @@ const tick = () => new Promise((r) => setTimeout(r, 0));
 const CHANNELS: Record<string, ChannelConfig> = {
   C1: { cwd: '/proj/a', permissionMode: 'bypassPermissions', disallowedTools: ['AskUserQuestion'], model: 'claude-opus-5-5' },
   C2: { cwd: '/proj/b', permissionMode: 'default', disallowedTools: [] },
+  C3: { cwd: '/proj/a/', permissionMode: 'default', disallowedTools: [] },
 };
 
 function setup(over: Partial<RunnerDeps> = {}) {
@@ -99,7 +104,7 @@ function setup(over: Partial<RunnerDeps> = {}) {
   const pending = { rejectRun: mock((_id: string, _reason: string) => {}) };
   const canUse: CanUseTool = async () => ({ behavior: 'deny', message: 'x' });
   const deps: RunnerDeps = {
-    channels: CHANNELS,
+    channels: new Channels(CHANNELS),
     store,
     pending,
     canUseTool: () => canUse,
@@ -182,6 +187,51 @@ describe('Runner start guards', () => {
     const err = await start(runner, { threadTs: '200.2' }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(BusyError);
     expect((err as BusyError).run).toBe(run);
+  });
+
+  test('another channel mapped to the same folder is busy until the run ends', async () => {
+    const { runner, q } = setup();
+    const run = await start(runner);
+    const err = await start(runner, { channelId: 'C3', threadTs: '300.3' }).catch((e: unknown) => e);
+    expect(err).toBeInstanceOf(BusyError);
+    expect((err as BusyError).run).toBe(run);
+    await start(runner, { channelId: 'C2', threadTs: '300.4' });
+    q.instances[0]!.out.push(result(1, 0));
+    q.instances[0]!.out.end();
+    await run.finished;
+    expect((await start(runner, { channelId: 'C3', threadTs: '300.5' })).channelId).toBe('C3');
+  });
+
+  test('a symlink to a folder in use is busy', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'runner-lock-'));
+    try {
+      symlinkSync(dir, join(dir, '..', `${dir.split('/').pop()}-link`));
+      const channels = new Channels({
+        L1: { cwd: dir, permissionMode: 'default', disallowedTools: [] },
+        L2: { cwd: `${dir}-link`, permissionMode: 'default', disallowedTools: [] },
+      });
+      const { runner } = setup({ channels });
+      await start(runner, { channelId: 'L1' });
+      expect(start(runner, { channelId: 'L2', threadTs: '400.4' })).rejects.toBeInstanceOf(BusyError);
+    } finally {
+      rmSync(`${dir}-link`, { force: true });
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a reload applies to the next start and leaves the active run on its config', async () => {
+    const channels = new Channels({ C1: CHANNELS.C1! });
+    const { runner, q } = setup({ channels });
+    const run = await start(runner);
+    channels.replace({ C1: { cwd: '/proj/new', permissionMode: 'default', disallowedTools: [] } });
+    expect(run.cwd).toBe('/proj/a');
+    q.instances[0]!.out.push(result(1, 0));
+    q.instances[0]!.out.end();
+    await run.finished;
+    await start(runner, { threadTs: '500.5' });
+    expect(q.instances[1]!.options.cwd).toBe('/proj/new');
+    channels.replace({});
+    expect(start(runner, { threadTs: '500.6' })).rejects.toBeInstanceOf(NotConfiguredError);
   });
 
   test('resume cwd mismatch throws CwdMismatchError', async () => {

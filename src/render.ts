@@ -1,5 +1,6 @@
 import type { SDKMessage, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 import type { ActionsBlock, Button, ContextBlock, KnownBlock, PlainTextOption, SectionBlock, View } from '@slack/types';
+import { isDirectChannel } from './channels.ts';
 import {
   ACTION,
   PROGRESS_LINES,
@@ -131,6 +132,9 @@ export function assistantText(msg: SDKMessage): string | undefined {
     .trim();
   return text || undefined;
 }
+
+/** `<#D…>` renders as an unknown channel, so direct message channels get a plain label. */
+export const channelLabel = (channelId: string) => (isDirectChannel(channelId) ? 'Direct' : `<#${channelId}>`);
 
 export function threadLink(teamUrl: string, channelId: string, threadTs: string): string {
   return `${teamUrl.replace(/\/$/, '')}/archives/${channelId}/p${threadTs.replace('.', '')}`;
@@ -351,7 +355,7 @@ export function homeView(active: RunSnapshot[], recent: RunRecord[], opts: { now
 
   if (active.length === 0) blocks.push(context('No active runs'));
   for (const run of active.slice(0, MAX_ACTIVE_HOME)) {
-    const text = `<#${run.channelId}> · ${stateLine(run)} · ${formatDuration(elapsedOf(run, opts.now))}${link(run.channelId, run.threadTs)}\n${snippet(run.prompt)}`;
+    const text = `${channelLabel(run.channelId)} · ${stateLine(run)} · ${formatDuration(elapsedOf(run, opts.now))}${link(run.channelId, run.threadTs)}\n${snippet(run.prompt)}`;
     blocks.push(section(text, canStop(run) ? { accessory: button('Stop', ACTION.stop, run.id, 'danger') } : {}));
   }
   if (active.length > MAX_ACTIVE_HOME) blocks.push(context(`…and ${active.length - MAX_ACTIVE_HOME} more`));
@@ -360,7 +364,7 @@ export function homeView(active: RunSnapshot[], recent: RunRecord[], opts: { now
   if (recent.length === 0) blocks.push(context('No recent runs'));
   for (const r of recent.slice(0, RECENT_RUNS)) {
     const duration = r.durationMs ?? (r.endedAt != null ? r.endedAt - r.startedAt : null);
-    const text = `${STATUS_EMOJI[r.status]} <#${r.channelId}> · ${duration != null ? formatDuration(duration) : '—'} · ${formatCost(r.costUsd)}${link(r.channelId, r.threadTs)}\n${snippet(r.prompt)}`;
+    const text = `${STATUS_EMOJI[r.status]} ${channelLabel(r.channelId)} · ${duration != null ? formatDuration(duration) : '—'} · ${formatCost(r.costUsd)}${link(r.channelId, r.threadTs)}\n${snippet(r.prompt)}`;
     blocks.push(section(text));
   }
   return { type: 'home', blocks };

@@ -1,6 +1,7 @@
 import { readFileSync, statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk';
+import { DIRECT_KEY, isDirectChannel } from './channels.ts';
 import { errorMessage, isRecord, type ChannelConfig, type Config } from './types.ts';
 
 const PERMISSION_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'];
@@ -21,6 +22,7 @@ export function parseChannels(raw: unknown): Record<string, ChannelConfig> {
   if (!isRecord(raw)) throw new ConfigError('channels file must contain a JSON object keyed by channel ID');
   const channels: Record<string, ChannelConfig> = {};
   for (const [channelId, entry] of Object.entries(raw)) {
+    if (channelId !== DIRECT_KEY && isDirectChannel(channelId)) throw new ConfigError(`channel ${channelId}: direct message channels are configured with the "${DIRECT_KEY}" key`);
     if (!isRecord(entry)) throw new ConfigError(`channel ${channelId}: entry must be an object`);
     const { cwd, permissionMode = 'bypassPermissions', disallowedTools = [], model } = entry;
     if (typeof cwd !== 'string' || cwd === '') throw new ConfigError(`channel ${channelId}: cwd is required`);
@@ -45,6 +47,16 @@ export function parseChannels(raw: unknown): Record<string, ChannelConfig> {
   return channels;
 }
 
+export function loadChannels(channelsFile: string): Record<string, ChannelConfig> {
+  let raw: unknown;
+  try {
+    raw = JSON.parse(readFileSync(channelsFile, 'utf8'));
+  } catch (err) {
+    throw new ConfigError(`cannot read ${channelsFile}: ${errorMessage(err)}`);
+  }
+  return parseChannels(raw);
+}
+
 function retentionDays(raw: string | undefined): number {
   if (raw === undefined || raw === '') return 30;
   if (!/^\d+$/.test(raw)) throw new ConfigError(`RETENTION_DAYS must be a non-negative integer, got ${JSON.stringify(raw)}`);
@@ -64,12 +76,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   if (uid === 0) throw new ConfigError('refusing to run as root');
 
   const channelsFile = env.CHANNELS_FILE || './channels.json';
-  let raw: unknown;
-  try {
-    raw = JSON.parse(readFileSync(channelsFile, 'utf8'));
-  } catch (err) {
-    throw new ConfigError(`cannot read ${channelsFile}: ${errorMessage(err)}`);
-  }
+  const channels = loadChannels(channelsFile);
 
   return {
     slackBotToken: required(env, 'SLACK_BOT_TOKEN'),
@@ -78,6 +85,6 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     channelsFile,
     dbPath: env.DB_PATH || './data/bot.db',
     retentionDays: retentionDays(env.RETENTION_DAYS),
-    channels: parseChannels(raw),
+    channels,
   };
 }

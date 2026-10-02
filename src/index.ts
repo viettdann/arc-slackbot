@@ -1,10 +1,11 @@
 import { dirname, resolve } from 'node:path';
-import { loadConfig, ConfigError } from './config.ts';
+import { Channels, describeDiff, isEmptyDiff, watchFile } from './channels.ts';
+import { loadChannels, loadConfig, ConfigError } from './config.ts';
 import { createFileSaver, pruneFiles } from './files.ts';
 import { PendingRegistry } from './permissions.ts';
 import { assistantText, progressLine } from './render.ts';
 import { Runner } from './runner.ts';
-import { Controller, createSlackApp, registerHandlers } from './slack.ts';
+import { Controller, createSlackApp, registerHandlers, type ReloadOutcome } from './slack.ts';
 import { Store } from './store.ts';
 import { errorMessage } from './types.ts';
 
@@ -26,6 +27,7 @@ async function main(): Promise<void> {
   const store = new Store(config.dbPath);
   const filesDir = resolve(dirname(config.dbPath), 'files');
   const registry = new PendingRegistry();
+  const channels = new Channels(config.channels);
   const app = createSlackApp(config);
   const auth = await app.client.auth.test();
   if (!auth.user_id) throw new Error('auth.test returned no bot user id');
@@ -33,7 +35,7 @@ async function main(): Promise<void> {
   // Runner and Controller reference each other; the closure defers the lookup until the first run starts.
   let controller: Controller | undefined;
   const runner = new Runner({
-    channels: config.channels,
+    channels,
     store,
     pending: registry,
     canUseTool: (run) => controller!.canUseToolFor(run),
@@ -45,16 +47,20 @@ async function main(): Promise<void> {
     store,
     registry,
     config,
+    channels,
+    loadChannels: () => loadChannels(config.channelsFile),
     botUserId: auth.user_id,
     saveFiles: createFileSaver({ token: config.slackBotToken, dir: filesDir }),
     teamUrl: auth.url,
   });
   registerHandlers(app, controller);
 
+  let unwatch: (() => void) | undefined;
   let shuttingDown = false;
   const shutdown = async (signal: string) => {
     if (shuttingDown) return;
     shuttingDown = true;
+    unwatch?.();
     console.log(`${signal}: stopping ${runner.active().length} run(s)`);
     try {
       await runner.stopAll();
@@ -77,6 +83,22 @@ async function main(): Promise<void> {
   if (interrupted.length > 0) {
     console.log(`marking ${interrupted.length} run(s) interrupted by the previous crash`);
     void controller.cleanupInterrupted(interrupted).catch((err) => console.error('cleanup interrupted:', errorMessage(err)));
+  }
+
+  void controller
+    .membershipWarnings()
+    .then((warnings) => warnings.forEach((w) => console.warn(`channels: ${w}`)))
+    .catch((err) => console.error('membership check:', errorMessage(err)));
+
+  const logReload = (outcome: ReloadOutcome) => {
+    if (!outcome.ok) console.error(`channels reload failed, keeping the previous mapping: ${outcome.error}`);
+    else if (!isEmptyDiff(outcome.diff)) console.log(`channels reloaded: ${describeDiff(outcome.diff)}`);
+    if (outcome.ok) outcome.warnings.forEach((w) => console.warn(`channels: ${w}`));
+  };
+  try {
+    unwatch = watchFile(config.channelsFile, () => void controller.reloadChannels().then(logReload));
+  } catch (err) {
+    console.error(`cannot watch ${config.channelsFile}; use /claude reload:`, errorMessage(err));
   }
 
   if (config.retentionDays > 0) {

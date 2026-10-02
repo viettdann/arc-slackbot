@@ -1,6 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
+import { realpathSync } from 'node:fs';
+import { resolve } from 'node:path';
 import { getSessionInfo, query, type CanUseTool, type Options, type Query, type SDKMessage, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { Channels } from './channels.ts';
 import { InputQueue } from './input-queue.ts';
 import type { Store } from './store.ts';
 import { PROGRESS_LINES, errorMessage, isStopStatus, resultOutcome, type ChannelConfig, type FinalStatus, type RunSnapshot, type StopReason } from './types.ts';
@@ -11,8 +14,9 @@ export class NotConfiguredError extends Error {
 
 export class BusyError extends Error {
   override name = 'BusyError';
+  /** The active run holding the channel or the folder; it may belong to another channel mapped to the same folder. */
   constructor(readonly run: Run) {
-    super(`channel ${run.channelId} already has an active run`);
+    super(`channel ${run.channelId} already has an active run in ${run.cwd}`);
   }
 }
 
@@ -59,7 +63,7 @@ export interface StartOptions {
 }
 
 export interface RunnerDeps {
-  channels: Record<string, ChannelConfig>;
+  channels: Pick<Channels, 'get'>;
   store: Pick<Store, 'saveThread' | 'insertRun' | 'finishRun'>;
   pending: { rejectRun(runId: string, reason: string): void };
   canUseTool: (run: Run) => CanUseTool;
@@ -85,6 +89,7 @@ export interface RunnerEvents {
 
 interface RunState {
   resolveFinished: () => void;
+  folder: string;
   completedTurns: number;
   liveTurns: number;
   lastAssistantId?: string;
@@ -95,6 +100,15 @@ interface RunState {
 }
 
 const TIMED_OUT = Symbol('timed out');
+
+// Symlinks and trailing slashes must not let two channels mapped to the same folder run in it at once.
+function folderKey(cwd: string): string {
+  try {
+    return realpathSync(cwd);
+  } catch {
+    return resolve(cwd);
+  }
+}
 
 async function transcriptExists(sessionId: string, cwd: string): Promise<boolean> {
   try {
@@ -115,6 +129,7 @@ export class Runner extends EventEmitter<RunnerEvents> {
   readonly #byId = new Map<string, Run>();
   readonly #byChannel = new Map<string, Run>();
   readonly #byThread = new Map<string, Run>();
+  readonly #byFolder = new Map<string, Run>();
   readonly #state = new Map<string, RunState>();
   #shuttingDown = false;
 
@@ -144,11 +159,11 @@ export class Runner extends EventEmitter<RunnerEvents> {
   }
 
   async startRun(opts: StartOptions): Promise<Run> {
-    const channel = this.#guard(opts);
+    let { channel, folder } = this.#guard(opts);
     if (opts.resume) {
       if (!(await this.#sessionExists(opts.resume.sessionId, opts.resume.cwd))) throw new SessionMissingError(opts.resume.sessionId);
-      // The lookup yielded, so shutdown or another run may have claimed the channel meanwhile.
-      this.#guard(opts);
+      // The lookup yielded, so shutdown, a reload or another run may have changed the channel meanwhile.
+      ({ channel, folder } = this.#guard(opts));
     }
 
     const { promise: finished, resolve: resolveFinished } = Promise.withResolvers<void>();
@@ -169,7 +184,7 @@ export class Runner extends EventEmitter<RunnerEvents> {
       finished,
       resultCount: 0,
     };
-    const state: RunState = { resolveFinished, completedTurns: 0, liveTurns: 0, finalized: false };
+    const state: RunState = { resolveFinished, folder, completedTurns: 0, liveTurns: 0, finalized: false };
     // Pushed before beforeStart so a reply injected while the status message is being posted lands after the prompt.
     run.queue.push(opts.prompt);
     this.#register(run, state);
@@ -196,7 +211,7 @@ export class Runner extends EventEmitter<RunnerEvents> {
     // A Stop during beforeStart already closed the queue; the run then finalizes as stopped without spawning the CLI.
     if (!run.stopReason) {
       try {
-        run.query =this.#query({ prompt: run.queue, options: this.#options(channel, run, opts.resume?.sessionId) });
+        run.query = this.#query({ prompt: run.queue, options: this.#options(channel, run, opts.resume?.sessionId) });
       } catch (err) {
         state.thrownError = errorMessage(err);
       }
@@ -207,14 +222,15 @@ export class Runner extends EventEmitter<RunnerEvents> {
     return run;
   }
 
-  #guard(opts: StartOptions): ChannelConfig {
+  #guard(opts: StartOptions): { channel: ChannelConfig; folder: string } {
     if (this.#shuttingDown) throw new ShuttingDownError('bot is shutting down');
-    const channel = this.#deps.channels[opts.channelId];
+    const channel = this.#deps.channels.get(opts.channelId);
     if (!channel) throw new NotConfiguredError(`channel ${opts.channelId} is not configured`);
-    const busy = this.#byChannel.get(opts.channelId);
+    const folder = folderKey(channel.cwd);
+    const busy = this.#byChannel.get(opts.channelId) ?? this.#byFolder.get(folder);
     if (busy) throw new BusyError(busy);
     if (opts.resume && opts.resume.cwd !== channel.cwd) throw new CwdMismatchError(opts.resume.cwd, channel.cwd);
-    return channel;
+    return { channel, folder };
   }
 
   inject(channelId: string, threadTs: string, text: string): InjectResult {
@@ -393,12 +409,15 @@ export class Runner extends EventEmitter<RunnerEvents> {
     this.#byId.set(run.id, run);
     this.#byChannel.set(run.channelId, run);
     this.#byThread.set(threadKey(run.channelId, run.threadTs), run);
+    this.#byFolder.set(state.folder, run);
     this.#state.set(run.id, state);
   }
 
   #unregister(run: Run): void {
+    const folder = this.#state.get(run.id)?.folder;
     this.#byId.delete(run.id);
     this.#state.delete(run.id);
+    if (folder && this.#byFolder.get(folder) === run) this.#byFolder.delete(folder);
     if (this.#byChannel.get(run.channelId) === run) this.#byChannel.delete(run.channelId);
     const key = threadKey(run.channelId, run.threadTs);
     if (this.#byThread.get(key) === run) this.#byThread.delete(key);

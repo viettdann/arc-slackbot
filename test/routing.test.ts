@@ -1,16 +1,20 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { query as sdkQuery, Query, SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
+import { Channels } from '../src/channels.ts';
+import { ConfigError } from '../src/config.ts';
 import { PendingRegistry } from '../src/permissions.ts';
 import { Runner } from '../src/runner.ts';
 import { Controller, RateBudget, parseChannelArg, type SlackClient } from '../src/slack.ts';
 import { Store } from '../src/store.ts';
+import type { ChannelConfig } from '../src/types.ts';
 
 const BOT = 'UBOT';
 const OWNER = 'UOWNER';
 const CHANNEL = 'C111';
+const DIRECT = 'D555';
 
 interface FakeQuery {
   prompts: string[];
@@ -34,7 +38,15 @@ function setup() {
     reactions: { add: record('reactions.add'), remove: record('reactions.remove') },
     views: { publish: record('views.publish'), open: record('views.open') },
     files: { uploadV2: record('files.uploadV2') },
+    conversations: {
+      info: async ({ channel }: { channel: string }) => {
+        const m = membership[channel] ?? 'member';
+        if (m === 'member' || m === 'outside') return { ok: true, channel: { id: channel, is_member: m === 'member' } };
+        throw Object.assign(new Error(m), { data: { error: m } });
+      },
+    },
   } as unknown as SlackClient;
+  const membership: Record<string, 'member' | 'outside' | 'channel_not_found' | 'missing_scope'> = {};
 
   const queries: FakeQuery[] = [];
   const query = ((params: { prompt: AsyncIterable<SDKUserMessage>; options: { resume?: string } }) => {
@@ -74,9 +86,14 @@ function setup() {
   }) as unknown as typeof sdkQuery;
 
   const sessions = { alive: true };
+  const channel = (cwd = dir): ChannelConfig => ({ cwd, permissionMode: 'bypassPermissions', disallowedTools: [] });
+  const channels = new Channels({ [CHANNEL]: channel(), direct: channel(join(dir, 'direct')) });
+  mkdirSync(join(dir, 'direct'));
+  // Stands in for channels.json; a thrown ConfigError models an invalid file.
+  const file: { next: Record<string, ChannelConfig> | ConfigError } = { next: {} };
   let controller: Controller | undefined;
   const runner = new Runner({
-    channels: { [CHANNEL]: { cwd: dir, permissionMode: 'bypassPermissions', disallowedTools: [] } },
+    channels,
     store,
     pending: registry,
     canUseTool: (run) => controller!.canUseToolFor(run),
@@ -90,7 +107,12 @@ function setup() {
     runner,
     store,
     registry,
-    config: { allowedUserId: OWNER, channels: { [CHANNEL]: { cwd: dir, permissionMode: 'bypassPermissions', disallowedTools: [] } } },
+    config: { allowedUserId: OWNER },
+    channels,
+    loadChannels: () => {
+      if (file.next instanceof ConfigError) throw file.next;
+      return file.next;
+    },
     botUserId: BOT,
     saveFiles: async (files, channelId, threadTs) => ({ saved: files.map((f) => `/files/${channelId}/${threadTs}/${f.id}`), failed: [] }),
     teamUrl: 'https://example.slack.com/',
@@ -102,7 +124,7 @@ function setup() {
     store.close();
     rmSync(dir, { recursive: true, force: true });
   };
-  return { dir, store, registry, runner, controller, calls, queries, sessions, cleanup };
+  return { dir, store, registry, runner, controller, channels, channel, file, membership, calls, queries, sessions, cleanup };
 }
 
 type Ctx = ReturnType<typeof setup>;
@@ -212,6 +234,54 @@ describe('app_mention routing', () => {
     await ctx.controller.onAppMention({ channel: CHANNEL, user: 'USTRANGER', text: `<@${BOT}> hi`, ts: '600.0' });
     expect(ctx.calls).toHaveLength(0);
     expect(ctx.queries).toHaveLength(0);
+  });
+});
+
+describe('folder lock', () => {
+  test('a mention in another channel mapped to the busy folder names that channel', async () => {
+    ctx.channels.replace({ [CHANNEL]: ctx.channel(), C222: ctx.channel(`${ctx.dir}/`) });
+    await ctx.controller.onAppMention({ channel: CHANNEL, user: OWNER, text: `<@${BOT}> one`, ts: '510.0' });
+    await ctx.controller.onAppMention({ channel: 'C222', user: OWNER, text: `<@${BOT}> two`, ts: '511.0' });
+    const eph = ctx.calls.find((c) => c.method === 'chat.postEphemeral')!;
+    expect(eph.args).toMatchObject({ channel: 'C222', user: OWNER });
+    expect(eph.args.text).toContain(`Busy: \`${ctx.dir}\` is in use by a run in <#${CHANNEL}>.`);
+    expect(ctx.queries).toHaveLength(1);
+  });
+});
+
+describe('direct messages', () => {
+  test('a top-level direct message starts a run in its own thread without a mention', async () => {
+    await ctx.controller.onMessage({ channel: DIRECT, user: OWNER, text: 'check the logs', ts: '1000.0' });
+    const run = ctx.runner.byChannel(DIRECT)!;
+    expect(run).toMatchObject({ threadTs: '1000.0', prompt: 'check the logs', cwd: join(ctx.dir, 'direct') });
+    expect(ctx.calls.find((c) => c.method === 'chat.postMessage')!.args).toMatchObject({ channel: DIRECT, thread_ts: '1000.0' });
+  });
+
+  test('a direct message mention is stripped and an app_mention from a direct message is ignored', async () => {
+    const event = { channel: DIRECT, user: OWNER, text: `<@${BOT}> hi there`, ts: '1010.0' };
+    await ctx.controller.onAppMention(event);
+    expect(ctx.queries).toHaveLength(0);
+    await ctx.controller.onMessage(event);
+    await tick();
+    expect(ctx.queries).toHaveLength(1);
+    expect(ctx.queries[0]!.prompts).toEqual(['hi there']);
+  });
+
+  test('a reply in the direct message thread is injected; other users and bots are ignored', async () => {
+    await ctx.controller.onMessage({ channel: DIRECT, user: OWNER, text: 'start', ts: '1020.0' });
+    await ctx.controller.onMessage({ channel: DIRECT, user: OWNER, text: 'more', ts: '1020.1', thread_ts: '1020.0' });
+    await ctx.controller.onMessage({ channel: DIRECT, user: 'USTRANGER', text: 'x', ts: '1020.2', thread_ts: '1020.0' });
+    await ctx.controller.onMessage({ channel: DIRECT, user: OWNER, bot_id: 'B1', text: 'x', ts: '1020.3', thread_ts: '1020.0' });
+    await tick();
+    expect(ctx.queries).toHaveLength(1);
+    expect(ctx.queries[0]!.prompts).toEqual(['start', 'more']);
+  });
+
+  test('without a direct entry the direct message gets an ephemeral reply', async () => {
+    ctx.channels.replace({ [CHANNEL]: ctx.channel() });
+    await ctx.controller.onMessage({ channel: DIRECT, user: OWNER, text: 'hello', ts: '1030.0' });
+    expect(ctx.queries).toHaveLength(0);
+    expect(ctx.calls.find((c) => c.method === 'chat.postEphemeral')!.args).toMatchObject({ channel: DIRECT, text: expect.stringContaining('Direct messages are not configured') });
   });
 });
 
@@ -389,20 +459,58 @@ describe('stale actions', () => {
 describe('/claude', () => {
   test('stop with an escaped channel stops that channel', async () => {
     await ctx.controller.onAppMention({ channel: CHANNEL, user: OWNER, text: `<@${BOT}> go`, ts: '800.0' });
-    const reply = ctx.controller.onCommand({ user_id: OWNER, channel_id: 'C222', text: `stop <#${CHANNEL}|proj>` });
+    const reply = await ctx.controller.onCommand({ user_id: OWNER, channel_id: 'C222', text: `stop <#${CHANNEL}|proj>` });
     expect(reply).toContain('Stopping');
     await ctx.runner.byChannel(CHANNEL)?.finished;
     expect(ctx.runner.byChannel(CHANNEL)).toBeUndefined();
   });
 
   test('stop without argument uses the current channel; status lists runs', async () => {
-    expect(ctx.controller.onCommand({ user_id: OWNER, channel_id: CHANNEL, text: 'stop' })).toContain('No active run');
+    expect(await ctx.controller.onCommand({ user_id: OWNER, channel_id: CHANNEL, text: 'stop' })).toContain('No active run');
     await ctx.controller.onAppMention({ channel: CHANNEL, user: OWNER, text: `<@${BOT}> go`, ts: '810.0' });
-    expect(ctx.controller.onCommand({ user_id: OWNER, channel_id: CHANNEL, text: 'status' })).toContain(`<#${CHANNEL}>`);
+    expect(await ctx.controller.onCommand({ user_id: OWNER, channel_id: CHANNEL, text: 'status' })).toContain(`<#${CHANNEL}>`);
+  });
+
+  test('stop direct stops the direct message run; status labels it Direct', async () => {
+    await ctx.controller.onMessage({ channel: DIRECT, user: OWNER, text: 'go', ts: '830.0' });
+    expect(await ctx.controller.onCommand({ user_id: OWNER, channel_id: CHANNEL, text: 'status' })).toContain('• Direct ·');
+    expect(await ctx.controller.onCommand({ user_id: OWNER, channel_id: CHANNEL, text: 'stop direct' })).toBe('Stopping the run in Direct…');
+    await ctx.runner.byChannel(DIRECT)?.finished;
+    expect(ctx.runner.byChannel(DIRECT)).toBeUndefined();
+    expect(await ctx.controller.onCommand({ user_id: OWNER, channel_id: CHANNEL, text: 'stop direct' })).toBe('No active run in Direct.');
+    expect(await ctx.controller.onCommand({ user_id: OWNER, channel_id: CHANNEL, text: 'stop #nope' })).toContain('Unknown channel');
+  });
+
+  test('channels lists every entry with membership problems and the active run', async () => {
+    ctx.channels.replace({ [CHANNEL]: ctx.channel(), C222: { ...ctx.channel('/p/two'), model: 'claude-opus-5-5' }, C333: ctx.channel('/p/three'), direct: ctx.channel('/p/direct') });
+    Object.assign(ctx.membership, { C222: 'outside', C333: 'missing_scope' });
+    await ctx.controller.onAppMention({ channel: CHANNEL, user: OWNER, text: `<@${BOT}> go`, ts: '840.0' });
+    const lines = (await ctx.controller.onCommand({ user_id: OWNER, channel_id: CHANNEL, text: 'channels' }))!.split('\n');
+    expect(lines).toHaveLength(4);
+    expect(lines[0]).toStartWith(`• <#${CHANNEL}> · \`${ctx.dir}\` · bypassPermissions · ⏳ active run <https://example.slack.com/archives/${CHANNEL}/p8400|thread>`);
+    expect(lines[1]).toBe('• <#C222> · `/p/two` · bypassPermissions · claude-opus-5-5 · ⚠️ bot is not in this channel; run `/invite @bot` there');
+    expect(lines[2]).toContain('add the `channels:read` and `groups:read` scopes');
+    expect(lines[3]).toBe('• Direct · `/p/direct` · bypassPermissions');
+  });
+
+  test('reload replaces the mapping and warns about added channels the bot is not in', async () => {
+    ctx.file.next = { [CHANNEL]: ctx.channel(), C444: ctx.channel('/p/four') };
+    ctx.membership.C444 = 'channel_not_found';
+    const reply = await ctx.controller.onCommand({ user_id: OWNER, channel_id: CHANNEL, text: 'reload' });
+    expect(reply).toBe('✅ Reloaded channels: added C444; removed direct.\n⚠️ <#C444>: bot is not in this channel; run `/invite @bot` there');
+    expect(ctx.channels.get('C444')?.cwd).toBe('/p/four');
+    expect(ctx.channels.get(DIRECT)).toBeUndefined();
+  });
+
+  test('a failed reload keeps the previous mapping', async () => {
+    ctx.file.next = new ConfigError('cannot read channels.json: bad JSON');
+    const reply = await ctx.controller.onCommand({ user_id: OWNER, channel_id: CHANNEL, text: 'reload' });
+    expect(reply).toBe('❌ Reload failed, keeping the previous mapping: cannot read channels.json: bad JSON');
+    expect(ctx.channels.get(CHANNEL)).toBeDefined();
   });
 
   test('non-allowed user gets nothing', async () => {
-    expect(ctx.controller.onCommand({ user_id: 'USTRANGER', channel_id: CHANNEL, text: 'status' })).toBeUndefined();
+    expect(await ctx.controller.onCommand({ user_id: 'USTRANGER', channel_id: CHANNEL, text: 'status' })).toBeUndefined();
   });
 
   test('parseChannelArg', () => {

@@ -2,21 +2,27 @@ import { App, LogLevel, type BlockAction, type ButtonAction } from '@slack/bolt'
 import type { WebClient } from '@slack/web-api';
 import type { KnownBlock, View } from '@slack/types';
 import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
+import { DIRECT_KEY, checkMembership, describeDiff, isDirectChannel, type ChannelDiff, type Channels, type Membership } from './channels.ts';
 import { withAttachments, type SaveFiles, type SlackFile } from './files.ts';
 import { alwaysAllow, approve, createCanUseTool, deny, pendingOf, setOtherAnswer, submitAnswers, type PendingRegistry } from './permissions.ts';
-import { MARKDOWN_LIMIT, elapsedOf, formatDuration, homeView, interruptedBlocks, promptBlocks, resultFromMessage, resultPayload, statusBlocks, threadLinkMrkdwn, truncate, type ResultPayload } from './render.ts';
+import { MARKDOWN_LIMIT, channelLabel, elapsedOf, formatDuration, homeView, interruptedBlocks, promptBlocks, resultFromMessage, resultPayload, statusBlocks, threadLinkMrkdwn, truncate, type ResultPayload } from './render.ts';
 import { BusyError, CwdMismatchError, NotConfiguredError, SessionMissingError, ShuttingDownError, type Run, type Runner, type StartOptions } from './runner.ts';
 import type { Store } from './store.ts';
-import { ACTION, RECENT_RUNS, VIEW, errorMessage, isStopStatus, parseOtherActionValue, questionBlockId, type Config, type FinalStatus, type Prompt, type RunRecord } from './types.ts';
+import { ACTION, RECENT_RUNS, VIEW, errorMessage, isStopStatus, parseOtherActionValue, questionBlockId, type ChannelConfig, type Config, type FinalStatus, type Prompt, type RunRecord } from './types.ts';
 
-export type SlackClient = Pick<WebClient, 'chat' | 'reactions' | 'views' | 'files'>;
+export type SlackClient = Pick<WebClient, 'chat' | 'reactions' | 'views' | 'files' | 'conversations'>;
+
+export type ReloadOutcome = { ok: true; diff: ChannelDiff; warnings: string[] } | { ok: false; error: string };
 
 export interface ControllerDeps {
   client: SlackClient;
   runner: Runner;
   store: Pick<Store, 'getThread' | 'hasRun' | 'recentRuns'>;
   registry: PendingRegistry;
-  config: Pick<Config, 'allowedUserId' | 'channels'>;
+  config: Pick<Config, 'allowedUserId'>;
+  channels: Channels;
+  /** Reads and validates the channels file; throws on an invalid file. */
+  loadChannels: () => Record<string, ChannelConfig>;
   botUserId: string;
   saveFiles: SaveFiles;
   teamUrl?: string;
@@ -202,28 +208,41 @@ export class Controller {
   }
 
   async onAppMention(event: MentionEvent): Promise<void> {
+    // Direct messages arrive as message events, where every message is addressed to the bot.
+    if (isDirectChannel(event.channel)) return;
     if (event.bot_id || !event.user || !this.isAllowed(event.user)) return;
+    await this.#addressed(event, event.user);
+  }
+
+  async #addressed(event: MentionEvent, userId: string): Promise<void> {
+    const direct = isDirectChannel(event.channel);
     const text = (event.text ?? '').replace(this.#mention, '').trim();
     const threadTs = event.thread_ts ?? event.ts;
     if (event.thread_ts && this.#isKnownThread(event.channel, event.thread_ts)) {
-      await this.#threadReply(event.channel, threadTs, await this.#prompt(text, event, threadTs), event.ts, event.user);
+      await this.#threadReply(event.channel, threadTs, await this.#prompt(text, event, threadTs), event.ts, userId);
       return;
     }
-    if (!this.#d.config.channels[event.channel]) {
-      await this.#ephemeral(event.channel, event.user, 'This channel is not configured for Claude.', event.thread_ts);
+    if (!this.#d.channels.get(event.channel)) {
+      const reply = direct ? `Direct messages are not configured for Claude: add a "${DIRECT_KEY}" entry to the channels file.` : 'This channel is not configured for Claude.';
+      await this.#ephemeral(event.channel, userId, reply, event.thread_ts);
       return;
     }
     if (!text && !event.files?.length) {
-      await this.#ephemeral(event.channel, event.user, 'Mention me followed by a prompt.', event.thread_ts);
+      if (!direct) await this.#ephemeral(event.channel, userId, 'Mention me followed by a prompt.', event.thread_ts);
       return;
     }
     const prompt = await this.#prompt(text, event, threadTs);
-    await this.#start({ channelId: event.channel, threadTs, prompt, triggerTs: event.ts, userId: event.user });
+    await this.#start({ channelId: event.channel, threadTs, prompt, triggerTs: event.ts, userId });
   }
 
   async onMessage(event: MessageEvent): Promise<void> {
-    if ((event.subtype && !REPLY_SUBTYPES.has(event.subtype)) || event.bot_id || !event.thread_ts || event.thread_ts === event.ts) return;
+    if ((event.subtype && !REPLY_SUBTYPES.has(event.subtype)) || event.bot_id) return;
     if (!event.user || !this.isAllowed(event.user)) return;
+    if (isDirectChannel(event.channel)) {
+      await this.#addressed(event, event.user);
+      return;
+    }
+    if (!event.thread_ts || event.thread_ts === event.ts) return;
     const text = (event.text ?? '').trim();
     // Replies that mention the bot also arrive as app_mention and are handled there.
     if (text.replace(this.#mention, '') !== text) return;
@@ -285,7 +304,8 @@ export class Controller {
       }
       if (err instanceof BusyError) {
         const link = threadLinkMrkdwn(this.#d.teamUrl, err.run.channelId, err.run.threadTs, 'View the active run.');
-        await this.#ephemeral(opts.channelId, userId, `Busy: this channel already has an active run.${link}`, opts.threadTs);
+        const reason = err.run.channelId === opts.channelId ? 'this channel already has an active run' : `\`${err.run.cwd}\` is in use by a run in ${channelLabel(err.run.channelId)}`;
+        await this.#ephemeral(opts.channelId, userId, `Busy: ${reason}.${link}`, opts.threadTs);
       } else if (err instanceof NotConfiguredError) {
         await this.#ephemeral(opts.channelId, userId, 'This channel is not configured for Claude.', opts.threadTs);
       } else if (err instanceof ShuttingDownError) {
@@ -305,19 +325,63 @@ export class Controller {
     }
   }
 
-  onCommand(cmd: CommandInput): string | undefined {
+  async onCommand(cmd: CommandInput): Promise<string | undefined> {
     if (!this.isAllowed(cmd.user_id)) return undefined;
     const [sub = 'status', arg] = cmd.text.trim().split(/\s+/).filter(Boolean);
     if (sub === 'status') return this.#statusText();
+    if (sub === 'channels') return this.#channelsText();
+    if (sub === 'reload') return reloadText(await this.reloadChannels());
     if (sub === 'stop') {
-      const channelId = arg ? parseChannelArg(arg) : cmd.channel_id;
-      if (!channelId) return `Unknown channel ${arg}. Usage: \`/claude stop [#channel]\``;
-      const run = this.#d.runner.byChannel(channelId);
-      if (!run) return `No active run in <#${channelId}>.`;
+      if (arg && arg !== DIRECT_KEY && !parseChannelArg(arg)) return `Unknown channel ${arg}. Usage: \`/claude stop [#channel|direct]\``;
+      const channelId = arg === DIRECT_KEY ? this.#directRun()?.channelId : arg ? parseChannelArg(arg) : cmd.channel_id;
+      const target = arg === DIRECT_KEY ? 'Direct' : channelLabel(channelId!);
+      const run = channelId ? this.#d.runner.byChannel(channelId) : undefined;
+      if (!run) return `No active run in ${target}.`;
       this.stop(run.id);
-      return `Stopping the run in <#${channelId}>…`;
+      return `Stopping the run in ${target}…`;
     }
-    return 'Usage: `/claude status` | `/claude stop [#channel]`';
+    return 'Usage: `/claude status` | `/claude channels` | `/claude reload` | `/claude stop [#channel|direct]`';
+  }
+
+  /** Keeps the current mapping when the file is invalid, so a bad edit never unmaps every channel. */
+  async reloadChannels(): Promise<ReloadOutcome> {
+    let next: Record<string, ChannelConfig>;
+    try {
+      next = this.#d.loadChannels();
+    } catch (err) {
+      return { ok: false, error: errorMessage(err) };
+    }
+    const diff = this.#d.channels.replace(next);
+    const warnings = await this.membershipWarnings(diff.added.filter((id) => id !== DIRECT_KEY));
+    return { ok: true, diff, warnings };
+  }
+
+  /** Mapped channels the bot cannot hear, since mentions there never reach it. */
+  async membershipWarnings(ids = this.#d.channels.channelIds()): Promise<string[]> {
+    const membership = await checkMembership(this.#d.client, ids);
+    return [...membership].flatMap(([id, m]) => (m.kind === 'member' ? [] : [`<#${id}>: ${membershipProblem(m)}`]));
+  }
+
+  // Only the allowed user's direct message with the bot reaches it, so at most one direct message run exists.
+  #directRun(): Run | undefined {
+    return this.#d.runner.active().find((r) => isDirectChannel(r.channelId));
+  }
+
+  async #channelsText(): Promise<string> {
+    const entries = this.#d.channels.entries();
+    if (entries.length === 0) return 'No channels configured.';
+    const membership = await checkMembership(this.#d.client, this.#d.channels.channelIds());
+    return entries
+      .map(([key, c]) => {
+        const parts = [key === DIRECT_KEY ? 'Direct' : `<#${key}>`, `\`${c.cwd}\``, c.permissionMode];
+        if (c.model) parts.push(c.model);
+        const m = membership.get(key);
+        if (m && m.kind !== 'member') parts.push(`⚠️ ${membershipProblem(m)}`);
+        const run = key === DIRECT_KEY ? this.#directRun() : this.#d.runner.byChannel(key);
+        if (run) parts.push(`⏳ active run${threadLinkMrkdwn(this.#d.teamUrl, run.channelId, run.threadTs, 'thread')}`);
+        return `• ${parts.join(' · ')}`;
+      })
+      .join('\n');
   }
 
   #statusText(): string {
@@ -327,7 +391,7 @@ export class Controller {
       .map((run) => {
         const state = run.phase === 'waiting' ? 'waiting for approval' : run.phase;
         const link = this.#d.teamUrl ? ` ·${threadLinkMrkdwn(this.#d.teamUrl, run.channelId, run.threadTs, 'thread')}` : '';
-        return `• <#${run.channelId}> · ${formatDuration(elapsedOf(run, this.#now()))} · ${state}${link}`;
+        return `• ${channelLabel(run.channelId)} · ${formatDuration(elapsedOf(run, this.#now()))} · ${state}${link}`;
       })
       .join('\n');
   }
@@ -571,6 +635,17 @@ export class Controller {
   }
 }
 
+function membershipProblem(m: Exclude<Membership, { kind: 'member' }>): string {
+  if (m.kind === 'not_member') return 'bot is not in this channel; run `/invite @bot` there';
+  if (m.error === 'missing_scope') return 'cannot check membership: add the `channels:read` and `groups:read` scopes and reinstall the app';
+  return `cannot check membership: ${m.error}`;
+}
+
+export function reloadText(outcome: ReloadOutcome): string {
+  if (!outcome.ok) return `❌ Reload failed, keeping the previous mapping: ${outcome.error}`;
+  return [`✅ Reloaded channels: ${describeDiff(outcome.diff)}.`, ...outcome.warnings.map((w) => `⚠️ ${w}`)].join('\n');
+}
+
 const MODAL_INPUT = 'text';
 
 const textInputModal = (callbackId: string, metadata: string, title: string, label: string): View => ({
@@ -612,15 +687,17 @@ export function registerHandlers(app: App, controller: Controller): void {
     if (event.tab === 'home') await guarded('app_home_opened', () => controller.publishHome(event.user));
   });
 
-  app.command('/claude', async ({ command, ack }) => {
+  // Acked first because channels and reload call the Slack API and could miss the 3 s ack deadline.
+  app.command('/claude', async ({ command, ack, respond }) => {
+    await ack();
     let text: string | undefined;
     try {
-      text = controller.onCommand(command);
+      text = await controller.onCommand(command);
     } catch (err) {
       log('/claude', err);
       text = `❌ ${errorMessage(err)}`;
     }
-    await ack(text ? { response_type: 'ephemeral', text } : undefined);
+    if (text) await guarded('/claude respond', () => respond({ response_type: 'ephemeral', text }));
   });
 
   const source = (body: BlockAction): ActionSource => ({

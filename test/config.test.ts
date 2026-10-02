@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { ConfigError, loadConfig, parseChannels } from '../src/config.ts';
+import { ConfigError, loadChannels, loadConfig, parseChannels } from '../src/config.ts';
 
 const UID = 1000;
 
@@ -127,6 +127,17 @@ describe('parseChannels', () => {
   test('invalid disallowedTools throws', () => {
     expect(() => parseChannels({ C1: { cwd: workDir, disallowedTools: 'Bash' } })).toThrow(/disallowedTools/);
     expect(() => parseChannels({ C1: { cwd: workDir, disallowedTools: ['Bash', 1] } })).toThrow(/disallowedTools/);
+  });
+
+  test('direct key is accepted; other direct message channel IDs are rejected', () => {
+    expect(parseChannels({ direct: { cwd: workDir } }).direct?.cwd).toBe(workDir);
+    expect(() => parseChannels({ D0123: { cwd: workDir } })).toThrow(/"direct" key/);
+  });
+
+  test('loadChannels reads the file and reports read errors as ConfigError', () => {
+    writeChannels({ C1: { cwd: workDir } });
+    expect(loadChannels(channelsFile).C1?.cwd).toBe(workDir);
+    expect(() => loadChannels(join(dir, 'missing.json'))).toThrow(/cannot read/);
   });
 
   test('non-object entry throws', () => {

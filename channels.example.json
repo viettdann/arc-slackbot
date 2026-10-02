@@ -9,5 +9,9 @@
     "cwd": "/abs/path/to/another-project",
     "permissionMode": "default",
     "disallowedTools": []
+  },
+  "direct": {
+    "cwd": "/abs/path/to/direct-workspace",
+    "permissionMode": "default"
   }
 }

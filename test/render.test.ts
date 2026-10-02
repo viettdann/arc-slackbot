@@ -326,6 +326,11 @@ describe('homeView', () => {
     expect(stop.accessory.value).toBe('run-1');
     expect(view.blocks.length).toBeLessThan(100);
   });
+  test('direct message runs are labelled Direct instead of a channel mention', () => {
+    const s = json(homeView([run({ channelId: 'D9' })], [{ ...rec(0), channelId: 'D9' }], { now: 0 }).blocks);
+    expect(s).not.toContain('<#D9>');
+    expect(s.match(/Direct ·/g)).toHaveLength(2);
+  });
   test('empty', () => {
     const s = json(homeView([], [], { now: 0 }).blocks);
     expect(s).toContain('No active runs');
