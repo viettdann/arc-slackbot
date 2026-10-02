@@ -66,34 +66,14 @@ function contentBlocks(msg: { message: unknown }): Record<string, unknown>[] {
   return Array.isArray(content) ? content.filter(isRecord) : [];
 }
 
-const TOOL_ICONS: Record<string, string> = {
-  Bash: '💻',
-  BashOutput: '💻',
-  KillShell: '💻',
-  Read: '📖',
-  Edit: '✏️',
-  MultiEdit: '✏️',
-  Write: '📝',
-  NotebookEdit: '📓',
-  Grep: '🔍',
-  Glob: '🔍',
-  WebFetch: '🌐',
-  WebSearch: '🌐',
-  Task: '🤖',
-  Agent: '🤖',
-  TodoWrite: '📋',
-  AskUserQuestion: '❓',
-};
-
 const ARG_KEYS = ['file_path', 'notebook_path', 'command', 'pattern', 'url', 'query', 'description'] as const;
 
 function toolLine(block: Record<string, unknown>, nested: boolean): string {
   const name = typeof block.name === 'string' ? block.name : 'tool';
-  const icon = TOOL_ICONS[name] ?? (name.startsWith('mcp__') ? '🔌' : '🔧');
   const input = isRecord(block.input) ? block.input : {};
   const key = ARG_KEYS.find((k) => typeof input[k] === 'string' && input[k] !== '');
   const arg = key ? ' ' + inlineCode(input[key] as string, 80) : '';
-  return `${nested ? '↳ ' : ''}${icon} *${escapeMrkdwn(name)}*${arg}`;
+  return `${nested ? '↳ ' : ''}*${escapeMrkdwn(name)}*${arg}`;
 }
 
 function toolResultText(content: unknown): string {

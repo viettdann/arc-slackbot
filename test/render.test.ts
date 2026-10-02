@@ -49,19 +49,19 @@ function run(over: Partial<RunSnapshot> = {}): RunSnapshot {
 describe('progressLine', () => {
   test('Bash shows command', () => {
     const [line] = progressLine(assistant([toolUse('Bash', { command: 'ls -la\n| grep <x>' })]));
-    expect(line).toBe('💻 *Bash* `ls -la | grep &lt;x&gt;`');
+    expect(line).toBe('*Bash* `ls -la | grep &lt;x&gt;`');
   });
   test('Read shows file_path', () => {
-    expect(progressLine(assistant([toolUse('Read', { file_path: '/a/b.ts' })]))).toEqual(['📖 *Read* `/a/b.ts`']);
+    expect(progressLine(assistant([toolUse('Read', { file_path: '/a/b.ts' })]))).toEqual(['*Read* `/a/b.ts`']);
   });
   test('Edit shows file_path', () => {
     expect(progressLine(assistant([toolUse('Edit', { file_path: '/a/c.ts', old_string: 'x' })]))[0]).toContain('`/a/c.ts`');
   });
   test('Grep shows pattern', () => {
-    expect(progressLine(assistant([toolUse('Grep', { pattern: 'foo.*bar' })]))[0]).toBe('🔍 *Grep* `foo.*bar`');
+    expect(progressLine(assistant([toolUse('Grep', { pattern: 'foo.*bar' })]))[0]).toBe('*Grep* `foo.*bar`');
   });
-  test('unknown tool gets default icon and no arg', () => {
-    expect(progressLine(assistant([toolUse('Mystery', { x: 1 })]))).toEqual(['🔧 *Mystery*']);
+  test('unknown tool has no arg', () => {
+    expect(progressLine(assistant([toolUse('Mystery', { x: 1 })]))).toEqual(['*Mystery*']);
   });
   test('long arg truncated to one line', () => {
     const [line] = progressLine(assistant([toolUse('Bash', { command: 'x'.repeat(500) })]));
@@ -126,7 +126,7 @@ describe('interruptedBlocks', () => {
 
 describe('statusBlocks', () => {
   test('running has Stop button with run id', () => {
-    const { blocks, text } = statusBlocks(run({ progress: ['💻 *Bash* `ls`'], lastText: 'hello <world>' }), { now: 46_000 });
+    const { blocks, text } = statusBlocks(run({ progress: ['*Bash* `ls`'], lastText: 'hello <world>' }), { now: 46_000 });
     expect(text).toContain('⏳ Running');
     const stop = find(blocks, (b) => b.type === 'actions').elements[0];
     expect(stop).toMatchObject({ action_id: ACTION.stop, value: 'run-1', style: 'danger' });
