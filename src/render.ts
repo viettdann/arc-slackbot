@@ -189,7 +189,8 @@ export function statusBlocks(run: RunSnapshot, opts: { now: number }): { text: s
 
   const lines = run.progress.slice(-PROGRESS_LINES).map((l) => truncate(l, 280));
   if (lines.length > 0) blocks.push(section(lines.join('\n')));
-  if (run.lastText) blocks.push(section('💬 ' + escapeMrkdwn(truncate(run.lastText.trim(), 300))));
+  // Once the run ends the result message carries the text, so a preview here would duplicate it.
+  if (run.lastText && run.status === 'running') blocks.push(section('💬 ' + escapeMrkdwn(truncate(run.lastText.trim(), 300))));
 
   if (canStop(run)) {
     blocks.push({ type: 'actions', block_id: 'run_actions', elements: [button('Stop', ACTION.stop, run.id, 'danger')] });

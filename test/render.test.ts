@@ -138,8 +138,9 @@ describe('statusBlocks', () => {
     expect(statusBlocks(run({ phase: 'waiting' }), { now: 2_000 }).text).toContain('✋ Waiting for approval');
   });
   test('done and stopping have no Stop', () => {
-    const done = statusBlocks(run({ status: 'done', endedAt: 61_000 }), { now: 999_999 });
+    const done = statusBlocks(run({ status: 'done', endedAt: 61_000, lastText: 'final answer' }), { now: 999_999 });
     expect(actionIds(done.blocks)).toEqual([]);
+    expect(json(done.blocks)).not.toContain('final answer');
     expect(done.text).toContain('✅ Done');
     expect(json(done.blocks)).toContain('1m 00s');
     const stopping = statusBlocks(run({ phase: 'stopping' }), { now: 2_000 });
