@@ -15,8 +15,10 @@ export class NotConfiguredError extends Error {
 export class BusyError extends Error {
   override name = 'BusyError';
   /** The active run holding the channel or the folder; it may belong to another channel mapped to the same folder. */
-  constructor(readonly run: Run) {
+  readonly run: Run;
+  constructor(run: Run) {
     super(`channel ${run.channelId} already has an active run in ${run.cwd}`);
+    this.run = run;
   }
 }
 
@@ -26,18 +28,21 @@ export class ShuttingDownError extends Error {
 
 export class CwdMismatchError extends Error {
   override name = 'CwdMismatchError';
-  constructor(
-    readonly storedCwd: string,
-    readonly channelCwd: string,
-  ) {
+  readonly storedCwd: string;
+  readonly channelCwd: string;
+  constructor(storedCwd: string, channelCwd: string) {
     super(`session cwd ${storedCwd} does not match channel cwd ${channelCwd}`);
+    this.storedCwd = storedCwd;
+    this.channelCwd = channelCwd;
   }
 }
 
 export class SessionMissingError extends Error {
   override name = 'SessionMissingError';
-  constructor(readonly sessionId: string) {
+  readonly sessionId: string;
+  constructor(sessionId: string) {
     super(`session ${sessionId} transcript not found`);
+    this.sessionId = sessionId;
   }
 }
 

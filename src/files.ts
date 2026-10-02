@@ -1,4 +1,4 @@
-import { mkdir, readdir, rm, rmdir, stat } from 'node:fs/promises';
+import { mkdir, readdir, rm, rmdir, stat, writeFile } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { errorMessage } from './types.ts';
 
@@ -32,7 +32,7 @@ export function createFileSaver(opts: { token: string; dir: string; fetch?: type
     // Slack answers a token without files:read with a 200 HTML login page instead of an error.
     if (res.headers.get('content-type')?.startsWith('text/html')) throw new Error('got an HTML page; is the files:read scope granted?');
     const path = join(dir, `${file.id}-${safeFileName(file.name ?? file.id)}`);
-    await Bun.write(path, res);
+    await writeFile(path, res.body ?? '');
     return path;
   };
 

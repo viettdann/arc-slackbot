@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -487,7 +487,7 @@ describe('/claude', () => {
     await ctx.controller.onAppMention({ channel: CHANNEL, user: OWNER, text: `<@${BOT}> go`, ts: '840.0' });
     const lines = (await ctx.controller.onCommand({ user_id: OWNER, channel_id: CHANNEL, text: 'channels' }))!.split('\n');
     expect(lines).toHaveLength(4);
-    expect(lines[0]).toStartWith(`• <#${CHANNEL}> · \`${ctx.dir}\` · bypassPermissions · ⏳ active run <https://example.slack.com/archives/${CHANNEL}/p8400|thread>`);
+    expect(lines[0]!.startsWith(`• <#${CHANNEL}> · \`${ctx.dir}\` · bypassPermissions · ⏳ active run <https://example.slack.com/archives/${CHANNEL}/p8400|thread>`)).toBe(true);
     expect(lines[1]).toBe('• <#C222> · `/p/two` · bypassPermissions · claude-opus-5-5 · ⚠️ bot is not in this channel; run `/invite @bot` there');
     expect(lines[2]).toContain('add the `channels:read` and `groups:read` scopes');
     expect(lines[3]).toBe('• Direct · `/p/direct` · bypassPermissions');

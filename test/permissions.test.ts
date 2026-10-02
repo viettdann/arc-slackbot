@@ -1,4 +1,5 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
+import { setTimeout as sleep } from 'node:timers/promises';
 import type { PermissionUpdate } from '@anthropic-ai/claude-agent-sdk';
 import {
   PendingRegistry,
@@ -46,7 +47,7 @@ async function pendingId(registry: PendingRegistry): Promise<string> {
   for (let i = 0; i < 50; i++) {
     const entry = registry.entries()[0];
     if (entry) return entry.id;
-    await Bun.sleep(0);
+    await sleep(0);
   }
   throw new Error('no pending entry');
 }
@@ -253,7 +254,7 @@ describe('cancellation and lifecycle', () => {
     const { registry, canUseTool } = setup();
     const results = [call(canUseTool, 'Bash', {}), call(canUseTool, 'Bash', {})];
     await pendingId(registry);
-    while (registry.entries().length < 2) await Bun.sleep(0);
+    while (registry.entries().length < 2) await sleep(0);
     const ids = registry.entries().map((e) => e.id);
     expect(new Set(ids).size).toBe(2);
     for (const id of ids) expect(id.length).toBeLessThanOrEqual(12);

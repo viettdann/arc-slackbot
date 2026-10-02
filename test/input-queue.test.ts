@@ -1,4 +1,4 @@
-import { describe, expect, test } from 'bun:test';
+import { describe, expect, test } from 'vitest';
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { InputQueue, QueueClosedError } from '../src/input-queue.ts';
 

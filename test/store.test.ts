@@ -1,5 +1,5 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { Database } from 'bun:sqlite';
+import { afterEach, beforeEach, describe, expect, test } from 'vitest';
+import { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -39,13 +39,13 @@ describe('Store', () => {
 
   test('migrates a version 0 database and keeps its rows', () => {
     mkdirSync(join(dir, 'nested', 'data'), { recursive: true });
-    const legacy = new Database(dbPath);
-    legacy.run(`CREATE TABLE runs (id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, thread_ts TEXT NOT NULL, session_id TEXT, prompt TEXT NOT NULL, status TEXT NOT NULL, turns INTEGER, cost_usd REAL, duration_ms INTEGER, started_at INTEGER NOT NULL, ended_at INTEGER)`);
-    legacy.run(`INSERT INTO runs (id, channel_id, thread_ts, prompt, status, started_at) VALUES ('r0', 'C1', '1.1', 'p', 'done', 1)`);
+    const legacy = new DatabaseSync(dbPath);
+    legacy.exec(`CREATE TABLE runs (id TEXT PRIMARY KEY, channel_id TEXT NOT NULL, thread_ts TEXT NOT NULL, session_id TEXT, prompt TEXT NOT NULL, status TEXT NOT NULL, turns INTEGER, cost_usd REAL, duration_ms INTEGER, started_at INTEGER NOT NULL, ended_at INTEGER)`);
+    legacy.exec(`INSERT INTO runs (id, channel_id, thread_ts, prompt, status, started_at) VALUES ('r0', 'C1', '1.1', 'p', 'done', 1)`);
     legacy.close();
 
     const s = open();
-    expect(s.db.query<{ user_version: number }, []>('PRAGMA user_version').get()?.user_version).toBe(1);
+    expect(s.db.prepare('PRAGMA user_version').get()?.user_version).toBe(1);
     expect(s.recentRuns(1)[0]).toMatchObject({ id: 'r0', statusTs: null, triggerTs: null });
     s.insertRun({ id: 'r1', channelId: 'C1', threadTs: '2.2', prompt: 'p', startedAt: 2, statusTs: '2.3', triggerTs: '2.2' });
     expect(reopen().recentRuns(1)[0]).toMatchObject({ id: 'r1', statusTs: '2.3', triggerTs: '2.2' });

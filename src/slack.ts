@@ -86,11 +86,14 @@ export class RateBudget {
   #tokens: number;
   #last: number;
 
-  constructor(
-    readonly perMinute = 45,
-    readonly burst = 10,
-    readonly now: () => number = Date.now,
-  ) {
+  readonly perMinute: number;
+  readonly burst: number;
+  readonly now: () => number;
+
+  constructor(perMinute = 45, burst = 10, now: () => number = Date.now) {
+    this.perMinute = perMinute;
+    this.burst = burst;
+    this.now = now;
     this.#tokens = burst;
     this.#last = now();
   }

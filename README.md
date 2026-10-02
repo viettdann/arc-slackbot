@@ -4,7 +4,7 @@ A Slack bot built on the Claude Agent SDK. Mentioning the bot in a configured ch
 
 ## Requirements
 
-- Bun >= 1.4.2
+- Node.js >= 24 and pnpm
 - A non-root user (the bot refuses to start as uid 0)
 - A Claude login on the machine running the bot (see below)
 
@@ -72,8 +72,8 @@ Edits to `channels.json` are picked up automatically, or with `/claude reload`. 
 ### 6. Install and run
 
 ```sh
-bun install
-bun start
+pnpm install
+pnpm start
 ```
 
 ## Usage
@@ -105,6 +105,6 @@ The manifest now requests `channels:read`, `groups:read` (membership check) and 
 ## Development
 
 ```sh
-bun test
-bun run typecheck
+pnpm test
+pnpm typecheck
 ```

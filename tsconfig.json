@@ -2,14 +2,15 @@
   "compilerOptions": {
     "strict": true,
     "target": "ESNext",
-    "module": "ESNext",
-    "moduleResolution": "bundler",
-    "types": ["bun"],
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "types": ["node"],
     "noEmit": true,
     "skipLibCheck": true,
     "verbatimModuleSyntax": true,
     "noUncheckedIndexedAccess": true,
-    "allowImportingTsExtensions": true
+    "allowImportingTsExtensions": true,
+    "erasableSyntaxOnly": true
   },
   "include": ["src", "test"]
 }

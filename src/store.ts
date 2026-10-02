@@ -1,4 +1,4 @@
-import { Database } from 'bun:sqlite';
+import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
 import { dirname } from 'node:path';
 import type { FinalStatus, RunRecord, RunStatus, ThreadRecord } from './types.ts';
@@ -97,44 +97,48 @@ const toRun = (r: RunRow): RunRecord => ({
 });
 
 export class Store {
-  readonly db: Database;
+  readonly db: DatabaseSync;
 
   constructor(path: string) {
     if (path !== ':memory:') mkdirSync(dirname(path), { recursive: true });
-    this.db = new Database(path, { create: true, strict: true });
-    this.db.run('PRAGMA journal_mode = WAL');
-    this.db.run(SCHEMA);
+    this.db = new DatabaseSync(path);
+    this.db.exec('PRAGMA journal_mode = WAL');
+    this.db.exec(SCHEMA);
     this.#migrate();
   }
 
   #migrate(): void {
-    const { user_version: version } = this.db.query<{ user_version: number }, []>('PRAGMA user_version').get()!;
+    const { user_version: version } = this.db.prepare('PRAGMA user_version').get() as { user_version: number };
     for (let v = version; v < MIGRATIONS.length; v++) {
-      this.db.transaction(() => {
-        this.db.run(MIGRATIONS[v]!);
-        this.db.run(`PRAGMA user_version = ${v + 1}`);
-      })();
+      this.db.exec('BEGIN');
+      try {
+        this.db.exec(MIGRATIONS[v]!);
+        this.db.exec(`PRAGMA user_version = ${v + 1}`);
+        this.db.exec('COMMIT');
+      } catch (err) {
+        this.db.exec('ROLLBACK');
+        throw err;
+      }
     }
   }
 
   /** Only runs started before `bootedAt` can be crash leftovers; later ones belong to this process. */
   recoverStaleRuns(bootedAt: number, now = Date.now()): RunRecord[] {
-    return this.db
-      .query<RunRow, { bootedAt: number; now: number }>(
+    return (
+      this.db.prepare(
         `UPDATE runs SET status = 'shutdown', ended_at = $now, duration_ms = $now - started_at WHERE status = 'running' AND started_at < $bootedAt RETURNING *`,
-      )
-      .all({ bootedAt, now })
-      .map(toRun);
+      ).all({ bootedAt, now }) as unknown as RunRow[]
+    ).map(toRun);
   }
 
   pruneRuns(cutoff: number): number {
     // started_at <= ended_at, so the started_at bound lets the index narrow the scan without changing the result.
-    return this.db.query('DELETE FROM runs WHERE started_at < $cutoff AND ended_at < $cutoff').run({ cutoff }).changes;
+    return Number(this.db.prepare('DELETE FROM runs WHERE started_at < $cutoff AND ended_at < $cutoff').run({ cutoff }).changes);
   }
 
   saveThread(t: Omit<ThreadRecord, 'updatedAt'> & { updatedAt?: number }): void {
     this.db
-      .query(
+      .prepare(
         `INSERT INTO threads (channel_id, thread_ts, session_id, cwd, updated_at) VALUES ($channelId, $threadTs, $sessionId, $cwd, $updatedAt)
          ON CONFLICT (channel_id, thread_ts) DO UPDATE SET session_id = excluded.session_id, cwd = excluded.cwd, updated_at = excluded.updated_at`,
       )
@@ -142,20 +146,18 @@ export class Store {
   }
 
   getThread(channelId: string, threadTs: string): ThreadRecord | null {
-    const row = this.db
-      .query<ThreadRow, { channelId: string; threadTs: string }>('SELECT * FROM threads WHERE channel_id = $channelId AND thread_ts = $threadTs')
-      .get({ channelId, threadTs });
+    const row = this.db.prepare('SELECT * FROM threads WHERE channel_id = $channelId AND thread_ts = $threadTs').get({ channelId, threadTs }) as ThreadRow | undefined;
     if (!row) return null;
     return { channelId: row.channel_id, threadTs: row.thread_ts, sessionId: row.session_id, cwd: row.cwd, updatedAt: row.updated_at };
   }
 
   hasRun(channelId: string, threadTs: string): boolean {
-    return !!this.db.query('SELECT 1 FROM runs WHERE channel_id = $channelId AND thread_ts = $threadTs LIMIT 1').get({ channelId, threadTs });
+    return !!this.db.prepare('SELECT 1 FROM runs WHERE channel_id = $channelId AND thread_ts = $threadTs LIMIT 1').get({ channelId, threadTs });
   }
 
   insertRun(r: NewRun): void {
     this.db
-      .query(
+      .prepare(
         `INSERT INTO runs (id, channel_id, thread_ts, session_id, prompt, status, started_at, status_ts, trigger_ts)
          VALUES ($id, $channelId, $threadTs, $sessionId, $prompt, 'running', $startedAt, $statusTs, $triggerTs)`,
       )
@@ -173,14 +175,14 @@ export class Store {
 
   finishRun(id: string, f: FinishedRun): void {
     this.db
-      .query(
+      .prepare(
         `UPDATE runs SET status = $status, session_id = COALESCE($sessionId, session_id), turns = $turns, cost_usd = $costUsd, duration_ms = $durationMs, ended_at = $endedAt WHERE id = $id`,
       )
       .run({ id, status: f.status, sessionId: f.sessionId ?? null, turns: f.turns, costUsd: f.costUsd ?? null, durationMs: f.durationMs, endedAt: f.endedAt });
   }
 
   recentRuns(limit: number): RunRecord[] {
-    return this.db.query<RunRow, [number]>('SELECT * FROM runs ORDER BY started_at DESC, rowid DESC LIMIT ?').all(limit).map(toRun);
+    return (this.db.prepare('SELECT * FROM runs ORDER BY started_at DESC, rowid DESC LIMIT ?').all(limit) as unknown as RunRow[]).map(toRun);
   }
 
   close(): void {

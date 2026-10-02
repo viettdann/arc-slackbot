@@ -1,4 +1,4 @@
-import { describe, expect, mock, test } from 'bun:test';
+import { describe, expect, test, vi, type Mock } from 'vitest';
 import { mkdtempSync, rmSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -46,21 +46,21 @@ interface FakeQuery {
   prompts: SDKUserMessage[];
   promptEnded: boolean;
   out: Channel<SDKMessage>;
-  interrupt: ReturnType<typeof mock<() => Promise<{ still_queued: string[] } | undefined>>>;
-  close: ReturnType<typeof mock<() => void>>;
+  interrupt: Mock<() => Promise<{ still_queued: string[] } | undefined>>;
+  close: Mock<() => void>;
 }
 
 function fakeQueryFactory() {
   const instances: FakeQuery[] = [];
-  const fn = mock(({ prompt, options }: { prompt: string | AsyncIterable<SDKUserMessage>; options?: Options }) => {
+  const fn = vi.fn(({ prompt, options }: { prompt: string | AsyncIterable<SDKUserMessage>; options?: Options }) => {
     const out = new Channel<SDKMessage>();
     const fq: FakeQuery = {
       options: options ?? {},
       prompts: [],
       promptEnded: false,
       out,
-      interrupt: mock(async () => ({ still_queued: [] as string[] })),
-      close: mock(() => out.end()),
+      interrupt: vi.fn(async () => ({ still_queued: [] as string[] })),
+      close: vi.fn(() => out.end()),
     };
     instances.push(fq);
     void (async () => {
@@ -100,8 +100,8 @@ const CHANNELS: Record<string, ChannelConfig> = {
 
 function setup(over: Partial<RunnerDeps> = {}) {
   const q = fakeQueryFactory();
-  const store = { saveThread: mock((_t: Omit<ThreadRecord, 'updatedAt'>) => {}), insertRun: mock((_r: NewRun) => {}), finishRun: mock((_id: string, _f: FinishedRun) => {}) };
-  const pending = { rejectRun: mock((_id: string, _reason: string) => {}) };
+  const store = { saveThread: vi.fn((_t: Omit<ThreadRecord, 'updatedAt'>) => {}), insertRun: vi.fn((_r: NewRun) => {}), finishRun: vi.fn((_id: string, _f: FinishedRun) => {}) };
+  const pending = { rejectRun: vi.fn((_id: string, _reason: string) => {}) };
   const canUse: CanUseTool = async () => ({ behavior: 'deny', message: 'x' });
   const deps: RunnerDeps = {
     channels: new Channels(CHANNELS),
@@ -178,7 +178,7 @@ describe('Runner options', () => {
 describe('Runner start guards', () => {
   test('unknown channel throws NotConfiguredError', async () => {
     const { runner } = setup();
-    expect(start(runner, { channelId: 'CX' })).rejects.toBeInstanceOf(NotConfiguredError);
+    await expect(start(runner, { channelId: 'CX' })).rejects.toBeInstanceOf(NotConfiguredError);
   });
 
   test('second run in the same channel throws BusyError carrying the active run', async () => {
@@ -212,7 +212,7 @@ describe('Runner start guards', () => {
       });
       const { runner } = setup({ channels });
       await start(runner, { channelId: 'L1' });
-      expect(start(runner, { channelId: 'L2', threadTs: '400.4' })).rejects.toBeInstanceOf(BusyError);
+      await expect(start(runner, { channelId: 'L2', threadTs: '400.4' })).rejects.toBeInstanceOf(BusyError);
     } finally {
       rmSync(`${dir}-link`, { force: true });
       rmSync(dir, { recursive: true, force: true });
@@ -231,7 +231,7 @@ describe('Runner start guards', () => {
     await start(runner, { threadTs: '500.5' });
     expect(q.instances[1]!.options.cwd).toBe('/proj/new');
     channels.replace({});
-    expect(start(runner, { threadTs: '500.6' })).rejects.toBeInstanceOf(NotConfiguredError);
+    await expect(start(runner, { threadTs: '500.6' })).rejects.toBeInstanceOf(NotConfiguredError);
   });
 
   test('resume cwd mismatch throws CwdMismatchError', async () => {
@@ -242,7 +242,7 @@ describe('Runner start guards', () => {
   });
 
   test('resume of a session whose transcript is gone throws SessionMissingError without spawning the CLI', async () => {
-    const sessionExists = mock(async (_id: string, _cwd: string) => false);
+    const sessionExists = vi.fn(async (_id: string, _cwd: string) => false);
     const { runner, q, store } = setup({ sessionExists });
     const err = await start(runner, { resume: { sessionId: 'gone', cwd: '/proj/a' } }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(SessionMissingError);
@@ -253,7 +253,7 @@ describe('Runner start guards', () => {
   });
 
   test('cwd mismatch is reported before the session lookup runs', async () => {
-    const sessionExists = mock(async () => false);
+    const sessionExists = vi.fn(async () => false);
     const { runner } = setup({ sessionExists });
     const err = await start(runner, { resume: { sessionId: 's', cwd: '/elsewhere' } }).catch((e: unknown) => e);
     expect(err).toBeInstanceOf(CwdMismatchError);
