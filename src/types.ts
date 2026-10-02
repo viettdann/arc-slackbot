@@ -1,6 +1,28 @@
 import type { PermissionMode, SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
 
 export const PROGRESS_LINES = 10;
+/** Grouped entries keep only the latest args; the count still covers every call. */
+export const GROUP_ARGS = 3;
+
+/** `head` is pre-escaped mrkdwn; `args` are raw and rendered as inline code. */
+export interface ProgressEntry {
+  head: string;
+  args: string[];
+  count: number;
+  path?: boolean;
+}
+
+/** Consecutive calls with the same head collapse into one entry so a burst of reads takes one line. */
+export function appendProgress(progress: ProgressEntry[], entries: ProgressEntry[]): ProgressEntry[] {
+  const out = [...progress];
+  for (const e of entries) {
+    const last = out.at(-1);
+    if (last && last.head === e.head && last.path === e.path) {
+      out[out.length - 1] = { ...last, args: [...last.args, ...e.args].slice(-GROUP_ARGS), count: last.count + e.count };
+    } else out.push(e);
+  }
+  return out.slice(-PROGRESS_LINES);
+}
 export const RECENT_RUNS = 20;
 
 export interface ChannelConfig {
@@ -45,7 +67,7 @@ export interface RunSnapshot {
   turns: number;
   costUsd?: number;
   /** Oldest first. */
-  progress: string[];
+  progress: ProgressEntry[];
   lastText?: string;
   error?: string;
   sessionId?: string;

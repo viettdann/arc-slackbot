@@ -39,7 +39,7 @@ async function main(): Promise<void> {
     store,
     pending: registry,
     canUseTool: (run) => controller!.canUseToolFor(run),
-    describe: (msg) => ({ lines: progressLine(msg), text: assistantText(msg) }),
+    describe: (msg, cwd) => ({ lines: progressLine(msg, cwd), text: assistantText(msg) }),
   });
   controller = new Controller({
     client: app.client,

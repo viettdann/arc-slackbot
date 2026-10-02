@@ -6,7 +6,7 @@ import { getSessionInfo, query, type CanUseTool, type Options, type Query, type 
 import type { Channels } from './channels.ts';
 import { InputQueue } from './input-queue.ts';
 import type { Store } from './store.ts';
-import { PROGRESS_LINES, errorMessage, isStopStatus, resultOutcome, type ChannelConfig, type FinalStatus, type RunSnapshot, type StopReason } from './types.ts';
+import { appendProgress, errorMessage, isStopStatus, resultOutcome, type ChannelConfig, type FinalStatus, type ProgressEntry, type RunSnapshot, type StopReason } from './types.ts';
 
 export class NotConfiguredError extends Error {
   override name = 'NotConfiguredError';
@@ -72,7 +72,7 @@ export interface RunnerDeps {
   store: Pick<Store, 'saveThread' | 'insertRun' | 'finishRun'>;
   pending: { rejectRun(runId: string, reason: string): void };
   canUseTool: (run: Run) => CanUseTool;
-  describe: (msg: SDKMessage) => { lines: string[]; text?: string };
+  describe: (msg: SDKMessage, cwd: string) => { lines: ProgressEntry[]; text?: string };
   query?: typeof query;
   sessionExists?: (sessionId: string, cwd: string) => Promise<boolean>;
   stopTimeoutMs?: number;
@@ -332,9 +332,9 @@ export class Runner extends EventEmitter<RunnerEvents> {
     }
 
     let changed = false;
-    const described = this.#safe(() => this.#deps.describe(msg));
+    const described = this.#safe(() => this.#deps.describe(msg, run.cwd));
     if (described?.lines.length) {
-      run.progress = [...run.progress, ...described.lines].slice(-PROGRESS_LINES);
+      run.progress = appendProgress(run.progress, described.lines);
       changed = true;
     }
     if (described?.text) {

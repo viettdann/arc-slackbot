@@ -10,6 +10,7 @@ import {
   interruptedBlocks,
   MARKDOWN_LIMIT,
   progressLine,
+  progressText,
   promptBlocks,
   questionBlocks,
   resultFromMessage,
@@ -17,7 +18,7 @@ import {
   statusBlocks,
   threadLink,
 } from '../src/render.ts';
-import { ACTION, questionBlockId, type ApprovalPrompt, type QuestionPrompt, type RunRecord, type RunSnapshot } from '../src/types.ts';
+import { ACTION, appendProgress, questionBlockId, type ApprovalPrompt, type ProgressEntry, type QuestionPrompt, type RunRecord, type RunSnapshot } from '../src/types.ts';
 
 const assistant = (content: unknown[], parent: string | null = null) =>
   ({ type: 'assistant', parent_tool_use_id: parent, message: { role: 'assistant', content } }) as unknown as SDKMessage;
@@ -25,6 +26,8 @@ const user = (content: unknown[]) =>
   ({ type: 'user', parent_tool_use_id: null, message: { role: 'user', content } }) as unknown as SDKMessage;
 const toolUse = (name: string, input: Record<string, unknown>) => ({ type: 'tool_use', id: 't1', name, input });
 
+const lines = (msg: SDKMessage, cwd = '/work/proj') => progressLine(msg, cwd).map(progressText);
+const entry = (head: string): ProgressEntry => ({ head, args: [], count: 1 });
 const json = (v: unknown) => JSON.stringify(v);
 const find = (blocks: AnyBlock[], pred: (b: any) => boolean): any => blocks.find(pred);
 const actionIds = (blocks: KnownBlock[]) =>
@@ -48,44 +51,78 @@ function run(over: Partial<RunSnapshot> = {}): RunSnapshot {
 
 describe('progressLine', () => {
   test('Bash shows command', () => {
-    const [line] = progressLine(assistant([toolUse('Bash', { command: 'ls -la\n| grep <x>' })]));
+    const [line] = lines(assistant([toolUse('Bash', { command: 'ls -la\n| grep <x>' })]));
     expect(line).toBe('*Bash* `ls -la | grep &lt;x&gt;`');
   });
   test('Read shows file_path', () => {
-    expect(progressLine(assistant([toolUse('Read', { file_path: '/a/b.ts' })]))).toEqual(['*Read* `/a/b.ts`']);
+    expect(lines(assistant([toolUse('Read', { file_path: '/a/b.ts' })]))).toEqual(['*Read* `/a/b.ts`']);
   });
   test('Edit shows file_path', () => {
-    expect(progressLine(assistant([toolUse('Edit', { file_path: '/a/c.ts', old_string: 'x' })]))[0]).toContain('`/a/c.ts`');
+    expect(lines(assistant([toolUse('Edit', { file_path: '/a/c.ts', old_string: 'x' })]))[0]).toContain('`/a/c.ts`');
   });
   test('Grep shows pattern', () => {
-    expect(progressLine(assistant([toolUse('Grep', { pattern: 'foo.*bar' })]))[0]).toBe('*Grep* `foo.*bar`');
+    expect(lines(assistant([toolUse('Grep', { pattern: 'foo.*bar' })]))[0]).toBe('*Grep* `foo.*bar`');
   });
   test('unknown tool has no arg', () => {
-    expect(progressLine(assistant([toolUse('Mystery', { x: 1 })]))).toEqual(['*Mystery*']);
+    expect(lines(assistant([toolUse('Mystery', { x: 1 })]))).toEqual(['*Mystery*']);
   });
   test('long arg truncated to one line', () => {
-    const [line] = progressLine(assistant([toolUse('Bash', { command: 'x'.repeat(500) })]));
+    const [line] = lines(assistant([toolUse('Bash', { command: 'x'.repeat(500) })]));
     expect(line!.length).toBeLessThan(110);
     expect(line).toContain('…');
   });
   test('one line per tool_use, text ignored, subagent marked', () => {
-    const lines = progressLine(
+    const out = lines(
       assistant([{ type: 'text', text: 'hi' }, toolUse('Read', { file_path: '/a' }), toolUse('Glob', { pattern: '*.ts' })], 'parent'),
     );
-    expect(lines).toHaveLength(2);
-    expect(lines[0]!.startsWith('↳ ')).toBe(true);
+    expect(out).toHaveLength(2);
+    expect(out[0]!.startsWith('↳ ')).toBe(true);
   });
   test('tool_result error → ❗ line', () => {
-    const lines = progressLine(user([{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: 'boom\nfailed' }]));
-    expect(lines).toEqual(['❗ boom failed']);
-    const arr = progressLine(user([{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: [{ type: 'text', text: 'bad' }] }]));
+    const out = lines(user([{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: 'boom\nfailed' }]));
+    expect(out).toEqual(['❗ boom failed']);
+    const arr = lines(user([{ type: 'tool_result', tool_use_id: 't1', is_error: true, content: [{ type: 'text', text: 'bad' }] }]));
     expect(arr).toEqual(['❗ bad']);
   });
   test('non-error tool_result ignored', () => {
-    expect(progressLine(user([{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }]))).toEqual([]);
+    expect(lines(user([{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }]))).toEqual([]);
   });
   test('other messages ignored', () => {
-    expect(progressLine({ type: 'system', subtype: 'init' } as unknown as SDKMessage)).toEqual([]);
+    expect(lines({ type: 'system', subtype: 'init' } as unknown as SDKMessage)).toEqual([]);
+  });
+  test('cwd prefix stripped from paths and commands', () => {
+    expect(lines(assistant([toolUse('Read', { file_path: '/work/proj/src/a.ts' })]))).toEqual(['*Read* `src/a.ts`']);
+    expect(lines(assistant([toolUse('Bash', { command: 'cd /work/proj/src; ls /work/proj/x' })]))).toEqual(['*Bash* `cd ./src; ls ./x`']);
+    expect(lines(assistant([toolUse('Read', { file_path: '/work/project/a.ts' })]))).toEqual(['*Read* `/work/project/a.ts`']);
+  });
+  test('long path keeps the file name', () => {
+    const [line] = lines(assistant([toolUse('Read', { file_path: `/work/proj/${'deep/'.repeat(30)}SKILL.md` })]));
+    expect(line).toMatch(/^\*Read\* `…\/deep\/.*\/SKILL\.md`$/);
+  });
+});
+
+describe('progress grouping', () => {
+  const read = (path: string) => progressLine(assistant([toolUse('Read', { file_path: path })]), '/w');
+  test('consecutive same tool collapses, keeping latest args', () => {
+    let p: ProgressEntry[] = [];
+    for (const f of ['a', 'b', 'c', 'd', 'e']) p = appendProgress(p, read(`/w/${f}.md`));
+    expect(p).toHaveLength(1);
+    expect(progressText(p[0]!)).toBe('*Read* ×5 … `c.md`, `d.md`, `e.md`');
+  });
+  test('different tool, nesting or error breaks the group', () => {
+    let p = appendProgress([], read('/w/a'));
+    p = appendProgress(p, progressLine(assistant([toolUse('Read', { file_path: '/w/b' })], 'parent'), '/w'));
+    p = appendProgress(p, read('/w/c'));
+    p = appendProgress(p, read('/w/d'));
+    expect(p.map(progressText)).toEqual(['*Read* `a`', '↳ *Read* `b`', '*Read* ×2 `c`, `d`']);
+  });
+  test('arg-less calls count without args', () => {
+    const m = progressLine(assistant([toolUse('Mystery', {}), toolUse('Mystery', {})]), '/w');
+    expect(appendProgress([], m).map(progressText)).toEqual(['*Mystery* ×2']);
+  });
+  test('keeps only the last PROGRESS_LINES entries', () => {
+    const p = appendProgress([], Array.from({ length: 15 }, (_, i) => ({ head: `h${i}`, args: [], count: 1 })));
+    expect(p.map((e) => e.head)).toEqual(Array.from({ length: 10 }, (_, i) => `h${i + 5}`));
   });
 });
 
@@ -126,7 +163,7 @@ describe('interruptedBlocks', () => {
 
 describe('statusBlocks', () => {
   test('running has Stop button with run id', () => {
-    const { blocks, text } = statusBlocks(run({ progress: ['*Bash* `ls`'], lastText: 'hello <world>' }), { now: 46_000 });
+    const { blocks, text } = statusBlocks(run({ progress: [{ head: '*Bash*', args: ['ls'], count: 1 }], lastText: 'hello <world>' }), { now: 46_000 });
     expect(text).toContain('⏳ Running');
     const stop = find(blocks, (b) => b.type === 'actions').elements[0];
     expect(stop).toMatchObject({ action_id: ACTION.stop, value: 'run-1', style: 'danger' });
@@ -147,12 +184,11 @@ describe('statusBlocks', () => {
     expect(actionIds(stopping.blocks)).toEqual([]);
     expect(stopping.text).toContain('Stopping');
   });
-  test('error shows message; only last 10 progress lines; within limits', () => {
-    const progress = Array.from({ length: 15 }, (_, i) => `line-${i}-${'y'.repeat(400)}`);
+  test('error shows message; within limits', () => {
+    const progress = Array.from({ length: 10 }, (_, i) => entry(`line-${i}-${'y'.repeat(400)}`));
     const { blocks, text } = statusBlocks(run({ status: 'error', error: 'kaput', progress }), { now: 2_000 });
     expect(text).toContain('❌ Error: kaput');
-    expect(json(blocks)).not.toContain('line-4-');
-    expect(json(blocks)).toContain('line-5-');
+    expect(json(blocks)).toContain('line-9-');
     for (const b of blocks) if (b.type === 'section') expect(b.text!.text.length).toBeLessThanOrEqual(3000);
   });
 });

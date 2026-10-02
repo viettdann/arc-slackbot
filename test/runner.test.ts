@@ -108,7 +108,7 @@ function setup(over: Partial<RunnerDeps> = {}) {
     store,
     pending,
     canUseTool: () => canUse,
-    describe: (msg) => (msg.type === 'assistant' ? { lines: [`line ${msg.message.id}`], text: `text ${msg.message.id}` } : { lines: [] }),
+    describe: (msg) => (msg.type === 'assistant' ? { lines: [{ head: `line ${msg.message.id}`, args: [], count: 1 }], text: `text ${msg.message.id}` } : { lines: [] }),
     query: q.fn as never,
     sessionExists: async () => true,
     stopTimeoutMs: 30,
@@ -333,7 +333,7 @@ describe('Runner consume loop', () => {
     out.push(assistant('sub', 'tool-1'));
     await tick();
     expect(run.progress).toHaveLength(10);
-    expect(run.progress.at(-1)).toBe('line sub');
+    expect(run.progress.at(-1)?.head).toBe('line sub');
     expect(run.lastText).toBe('text sub');
     expect(run.pendingText).toBe('text sub');
     expect(run.turns).toBe(12);

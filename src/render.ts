@@ -3,13 +3,13 @@ import type { ActionsBlock, Button, ContextBlock, KnownBlock, PlainTextOption, S
 import { isDirectChannel } from './channels.ts';
 import {
   ACTION,
-  PROGRESS_LINES,
   RECENT_RUNS,
   isRecord,
   otherActionValue,
   questionBlockId,
   resultOutcome,
   type ApprovalPrompt,
+  type ProgressEntry,
   type Prompt,
   type PromptOutcome,
   type QuestionPrompt,
@@ -30,6 +30,14 @@ export function truncate(s: string, max: number): string {
   return s.slice(0, Math.max(0, max - 1)) + '…';
 }
 
+/** Keeps the tail, where a path's file name lives, and snaps the cut to a directory boundary. */
+function truncateStart(s: string, max: number): string {
+  if (s.length <= max) return s;
+  const tail = s.slice(-(max - 1));
+  const slash = tail.indexOf('/');
+  return '…' + (slash >= 0 && slash < tail.length - 1 ? tail.slice(slash) : tail);
+}
+
 const oneLine = (s: string) => s.replace(/\s+/g, ' ').trim();
 
 function codeBlock(s: string, max: number): string {
@@ -38,8 +46,9 @@ function codeBlock(s: string, max: number): string {
   return '```\n' + safe + '\n```';
 }
 
-function inlineCode(s: string, max: number): string {
-  return '`' + escapeMrkdwn(truncate(oneLine(s).replace(/`/g, "'"), max)) + '`';
+function inlineCode(s: string, max: number, path = false): string {
+  const flat = oneLine(s).replace(/`/g, "'");
+  return '`' + escapeMrkdwn(path ? truncateStart(flat, max) : truncate(flat, max)) + '`';
 }
 
 const section = (text: string, extra: Partial<SectionBlock> = {}): SectionBlock => ({
@@ -67,13 +76,31 @@ function contentBlocks(msg: { message: unknown }): Record<string, unknown>[] {
 }
 
 const ARG_KEYS = ['file_path', 'notebook_path', 'command', 'pattern', 'url', 'query', 'description'] as const;
+const PATH_KEYS = new Set<string>(['file_path', 'notebook_path']);
 
-function toolLine(block: Record<string, unknown>, nested: boolean): string {
+/** The status header already shows the cwd, so repeating it in every arg only pushes the useful part out. */
+function relativize(s: string, cwd: string): string {
+  const root = cwd.replace(/\/+$/, '');
+  if (!root) return s;
+  return s.split(root + '/').join('./');
+}
+
+function toolEntry(block: Record<string, unknown>, nested: boolean, cwd: string): ProgressEntry {
   const name = typeof block.name === 'string' ? block.name : 'tool';
   const input = isRecord(block.input) ? block.input : {};
   const key = ARG_KEYS.find((k) => typeof input[k] === 'string' && input[k] !== '');
-  const arg = key ? ' ' + inlineCode(input[key] as string, 80) : '';
-  return `${nested ? '↳ ' : ''}*${escapeMrkdwn(name)}*${arg}`;
+  const head = `${nested ? '↳ ' : ''}*${escapeMrkdwn(name)}*`;
+  if (!key) return { head, args: [], count: 1 };
+  const path = PATH_KEYS.has(key);
+  const arg = relativize(oneLine(input[key] as string), cwd);
+  return { head, args: [path ? arg.replace(/^\.\//, '') : arg], count: 1, ...(path ? { path } : {}) };
+}
+
+export function progressText(e: ProgressEntry): string {
+  if (e.count === 1) return e.args.length ? `${e.head} ${inlineCode(e.args[0]!, 80, e.path)}` : e.head;
+  const args = e.args.map((a) => inlineCode(a, 40, e.path)).join(', ');
+  const more = e.count > e.args.length && e.args.length > 0 ? '… ' : '';
+  return `${e.head} ×${e.count}${args ? ` ${more}${args}` : ''}`;
 }
 
 function toolResultText(content: unknown): string {
@@ -87,18 +114,17 @@ function toolResultText(content: unknown): string {
   return '';
 }
 
-/** Returns pre-escaped mrkdwn lines; statusBlocks renders them verbatim. */
-export function progressLine(msg: SDKMessage): string[] {
+export function progressLine(msg: SDKMessage, cwd: string): ProgressEntry[] {
   if (msg.type === 'assistant') {
     const nested = msg.parent_tool_use_id !== null;
     return contentBlocks(msg)
       .filter((b) => b.type === 'tool_use' || b.type === 'server_tool_use' || b.type === 'mcp_tool_use')
-      .map((b) => toolLine(b, nested));
+      .map((b) => toolEntry(b, nested, cwd));
   }
   if (msg.type === 'user') {
     return contentBlocks(msg)
       .filter((b) => b.type === 'tool_result' && b.is_error === true)
-      .map((b) => '❗ ' + escapeMrkdwn(truncate(oneLine(toolResultText(b.content)) || 'tool error', 150)));
+      .map((b) => ({ head: '❗ ' + escapeMrkdwn(truncate(oneLine(toolResultText(b.content)) || 'tool error', 150)), args: [], count: 1 }));
   }
   return [];
 }
@@ -167,7 +193,7 @@ export function statusBlocks(run: RunSnapshot, opts: { now: number }): { text: s
   if (run.costUsd != null) meta.push(`~${formatCost(run.costUsd)}`);
   const blocks: KnownBlock[] = [section(`*${state}*`), context(meta.join(' · '))];
 
-  const lines = run.progress.slice(-PROGRESS_LINES).map((l) => truncate(l, 280));
+  const lines = run.progress.map((e) => truncate(progressText(e), 280));
   if (lines.length > 0) blocks.push(section(lines.join('\n')));
   // Once the run ends the result message carries the text, so a preview here would duplicate it.
   if (run.lastText && run.status === 'running') blocks.push(section('💬 ' + escapeMrkdwn(truncate(run.lastText.trim(), 300))));
