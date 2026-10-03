@@ -79,6 +79,7 @@ function fakeQueryFactory() {
       },
       interrupt: () => fq.interrupt(),
       close: () => fq.close(),
+      supportedCommands: async () => [{ name: 'deploy', description: 'Deploy', argumentHint: '<env>' }],
     };
     return gen as never;
   });
@@ -172,6 +173,24 @@ describe('Runner options', () => {
     await start(runner);
     await tick();
     expect(q.instances[0]!.prompts.map((m) => m.message.content)).toEqual(['hello']);
+  });
+});
+
+describe('Runner listCommands', () => {
+  test('returns commands from a throwaway query without a canUseTool or a run, then closes it', async () => {
+    const { runner, q, events } = setup();
+    await expect(runner.listCommands('C1')).resolves.toEqual([{ name: 'deploy', description: 'Deploy', argumentHint: '<env>' }]);
+    expect(q.instances).toHaveLength(1);
+    expect(q.instances[0]!.options.cwd).toBe('/proj/a');
+    expect(q.instances[0]!.options.canUseTool).toBeUndefined();
+    expect(q.instances[0]!.close).toHaveBeenCalled();
+    expect(runner.active()).toEqual([]);
+    expect(events).toEqual([]);
+  });
+
+  test('rejects an unconfigured channel', async () => {
+    const { runner } = setup();
+    await expect(runner.listCommands('C9')).rejects.toBeInstanceOf(NotConfiguredError);
   });
 });
 

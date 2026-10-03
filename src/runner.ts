@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
-import { getSessionInfo, query, type CanUseTool, type Options, type Query, type SDKMessage, type SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
+import { getSessionInfo, query, type CanUseTool, type Options, type Query, type SDKMessage, type SDKResultMessage, type SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import type { Channels } from './channels.ts';
 import { InputQueue } from './input-queue.ts';
 import type { Store } from './store.ts';
@@ -238,6 +238,20 @@ export class Runner extends EventEmitter<RunnerEvents> {
     return { channel, folder };
   }
 
+  /** Spawns a throwaway CLI that never receives a prompt, so listing costs no model call. */
+  async listCommands(channelId: string): Promise<SlashCommand[]> {
+    const channel = this.#deps.channels.get(channelId);
+    if (!channel) throw new NotConfiguredError(`channel ${channelId} is not configured`);
+    const queue = new InputQueue();
+    const q = this.#query({ prompt: queue, options: this.#options(channel, undefined, undefined) });
+    try {
+      return await q.supportedCommands();
+    } finally {
+      queue.close();
+      this.#safe(() => q.close());
+    }
+  }
+
   inject(channelId: string, threadTs: string, text: string): InjectResult {
     const run = this.byThread(channelId, threadTs);
     if (!run) return 'none';
@@ -299,13 +313,13 @@ export class Runner extends EventEmitter<RunnerEvents> {
     await run.finished;
   }
 
-  #options(channel: ChannelConfig, run: Run, resume: string | undefined): Options {
+  #options(channel: ChannelConfig, run: Run | undefined, resume: string | undefined): Options {
     const options: Options = {
       cwd: channel.cwd,
       permissionMode: channel.permissionMode,
       disallowedTools: channel.disallowedTools,
       settingSources: ['user', 'project', 'local'],
-      canUseTool: this.#deps.canUseTool(run),
+      ...(run ? { canUseTool: this.#deps.canUseTool(run) } : {}),
     };
     if (channel.permissionMode === 'bypassPermissions') options.allowDangerouslySkipPermissions = true;
     if (channel.model) options.model = channel.model;

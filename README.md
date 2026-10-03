@@ -90,6 +90,7 @@ pnpm start
 - **`/claude status`**: lists active runs with elapsed time, state, and thread link.
 - **`/claude stop [#channel|direct]`**: stops the active run in the current or given channel, or the direct message run.
 - **`/claude channels`**: lists the mapped channels with their folder, permission mode, model, membership warnings and active run.
+- **`@claude /skills`** (or `/skills` in a direct message): lists the skills and plugin commands the channel's folder loads, visible only to you. Run one with `@claude /<name> args`.
 - **`/claude reload`**: reloads `channels.json` and reports what changed, or the validation error.
 - **App Home**: shows active runs (with [Stop]) and the last 20 runs.
 - **Crash recovery**: if the bot dies without a clean shutdown, the next start rewrites the status messages of the runs it left behind to "Interrupted" and replaces their reaction with ⏹. Buttons on messages of runs or prompts that are no longer active answer with an ephemeral "no longer active".

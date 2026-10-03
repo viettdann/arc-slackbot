@@ -1,7 +1,7 @@
 import { App, LogLevel, type BlockAction, type ButtonAction } from '@slack/bolt';
 import type { WebClient } from '@slack/web-api';
 import type { KnownBlock, View } from '@slack/types';
-import type { SDKResultMessage } from '@anthropic-ai/claude-agent-sdk';
+import type { SDKResultMessage, SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import { DIRECT_KEY, checkMembership, describeDiff, isDirectChannel, type ChannelDiff, type Channels, type Membership } from './channels.ts';
 import { withAttachments, type SaveFiles, type SlackFile } from './files.ts';
 import { alwaysAllow, approve, createCanUseTool, deny, pendingOf, setOtherAnswer, submitAnswers, type PendingRegistry } from './permissions.ts';
@@ -77,6 +77,7 @@ const FINAL_REACTION: Record<FinalStatus, string> = {
 };
 
 // Replies with attachments and replies also sent to the channel carry these subtypes but are still the user's own thread replies.
+const SKILLS_COMMAND = /^\/skills$/i;
 const REPLY_SUBTYPES = new Set(['file_share', 'thread_broadcast']);
 
 const log = (label: string, err: unknown) => console.error(`slack: ${label}:`, errorMessage(err));
@@ -230,12 +231,27 @@ export class Controller {
       await this.#ephemeral(event.channel, userId, reply, event.thread_ts);
       return;
     }
+    if (SKILLS_COMMAND.test(text)) {
+      await this.#replySkills(event.channel, userId, event.thread_ts);
+      return;
+    }
     if (!text && !event.files?.length) {
       if (!direct) await this.#ephemeral(event.channel, userId, 'Mention me followed by a prompt.', event.thread_ts);
       return;
     }
     const prompt = await this.#prompt(text, event, threadTs);
     await this.#start({ channelId: event.channel, threadTs, prompt, triggerTs: event.ts, userId });
+  }
+
+  async #replySkills(channelId: string, userId: string, threadTs?: string): Promise<void> {
+    let reply: string;
+    try {
+      reply = skillsText(await this.#d.runner.listCommands(channelId));
+    } catch (err) {
+      log('list commands', err);
+      reply = `Failed to list skills: ${errorMessage(err)}`;
+    }
+    await this.#ephemeral(channelId, userId, reply, threadTs);
   }
 
   async onMessage(event: MessageEvent): Promise<void> {
@@ -640,6 +656,13 @@ export class Controller {
       .postEphemeral({ channel, user, text, ...(threadTs ? { thread_ts: threadTs } : {}) })
       .catch((err) => log('chat.postEphemeral', err));
   }
+}
+
+function skillsText(commands: SlashCommand[]): string {
+  const custom = commands.filter((c) => !c.builtin).sort((a, b) => a.name.localeCompare(b.name));
+  if (!custom.length) return 'No skills or plugin commands are available in this channel.';
+  const lines = custom.map((c) => `• \`/${c.name}\`${c.argumentHint ? ` ${c.argumentHint}` : ''}: ${c.description}`);
+  return `Mention me with a command, e.g. \`@claude /${custom[0]!.name}\`.\n${lines.join('\n')}`;
 }
 
 function membershipProblem(m: Exclude<Membership, { kind: 'member' }>): string {
