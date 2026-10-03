@@ -4,7 +4,7 @@ import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { getSessionInfo, query, type CanUseTool, type Options, type Query, type SDKMessage, type SDKResultMessage, type SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import type { Channels } from './channels.ts';
-import { THIRD_PARTY_RESERVED_ENV } from './config.ts';
+import { isThirdPartyReservedEnv } from './config.ts';
 import { InputQueue } from './input-queue.ts';
 import type { Store } from './store.ts';
 import { appendProgress, errorMessage, isStopStatus, resultOutcome, type ChannelConfig, type FinalStatus, type ProgressEntry, type RunSnapshot, type StopReason, type ThirdPartyConfig } from './types.ts';
@@ -109,14 +109,10 @@ interface RunState {
 
 /** Options.env replaces the CLI environment, so the bot's own environment is inherited minus every credential. */
 export function thirdPartyEnv(base: Record<string, string | undefined>, tp: ThirdPartyConfig): Record<string, string | undefined> {
-  const env = { ...base };
-  for (const key of THIRD_PARTY_RESERVED_ENV) delete env[key];
-  return {
-    ...env,
-    ...tp.env,
-    ANTHROPIC_BASE_URL: tp.baseUrl,
-    ...(tp.apiKey !== undefined ? { ANTHROPIC_API_KEY: tp.apiKey } : { ANTHROPIC_AUTH_TOKEN: tp.authToken }),
-  };
+  // Inherited custom headers may carry Anthropic auth; the channel's own env may still set them for the provider.
+  const inherited = Object.fromEntries(Object.entries(base).filter(([k]) => !isThirdPartyReservedEnv(k) && k !== 'ANTHROPIC_CUSTOM_HEADERS'));
+  const credential = tp.apiKey !== undefined ? { ANTHROPIC_API_KEY: tp.apiKey } : { ANTHROPIC_AUTH_TOKEN: tp.authToken };
+  return { ...inherited, ...tp.env, ANTHROPIC_BASE_URL: tp.baseUrl, ...credential };
 }
 
 const TIMED_OUT = Symbol('timed out');

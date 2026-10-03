@@ -18,8 +18,24 @@ function isDirectory(path: string): boolean {
   }
 }
 
-/** Variables the named thirdParty fields own, or that would send the Claude subscription token to the third-party host. */
-export const THIRD_PARTY_RESERVED_ENV = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'];
+/** Variables the named thirdParty fields own, or that make the CLI send Claude credentials or bypass baseUrl. */
+const THIRD_PARTY_RESERVED_ENV: ReadonlySet<string> = new Set([
+  'ANTHROPIC_BASE_URL',
+  'ANTHROPIC_API_KEY',
+  'ANTHROPIC_AUTH_TOKEN',
+  'ANTHROPIC_UNIX_SOCKET',
+  'ANTHROPIC_IDENTITY_TOKEN',
+  'ANTHROPIC_IDENTITY_TOKEN_FILE',
+  'CLAUDE_CODE_OAUTH_TOKEN',
+  'CLAUDE_CODE_OAUTH_REFRESH_TOKEN',
+  'CLAUDE_CODE_OAUTH_TOKEN_FILE_DESCRIPTOR',
+  'CLAUDE_CODE_API_KEY_FILE_DESCRIPTOR',
+  'CLAUDE_CODE_ENTRYPOINT',
+  'CLAUDE_CODE_REMOTE',
+  'CLAUDE_CODE_PROVIDER_MANAGED_BY_HOST',
+]);
+
+export const isThirdPartyReservedEnv = (key: string) => THIRD_PARTY_RESERVED_ENV.has(key) || key.startsWith('CLAUDE_CODE_USE_');
 
 const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v !== '';
 
@@ -27,14 +43,16 @@ function parseThirdParty(channelId: string, raw: unknown): ThirdPartyConfig {
   const at = `channel ${channelId}: thirdParty`;
   if (!isRecord(raw)) throw new ConfigError(`${at} must be an object`);
   const { baseUrl, apiKey, authToken, env = {} } = raw;
-  if (!isNonEmptyString(baseUrl) || !URL.canParse(baseUrl)) throw new ConfigError(`${at}.baseUrl must be a URL`);
+  const protocol = isNonEmptyString(baseUrl) ? URL.parse(baseUrl)?.protocol : undefined;
+  if (protocol !== 'https:' && protocol !== 'http:') throw new ConfigError(`${at}.baseUrl must be an http(s) URL`);
   if (apiKey !== undefined && !isNonEmptyString(apiKey)) throw new ConfigError(`${at}.apiKey must be a non-empty string`);
   if (authToken !== undefined && !isNonEmptyString(authToken)) throw new ConfigError(`${at}.authToken must be a non-empty string`);
   if ((apiKey === undefined) === (authToken === undefined)) throw new ConfigError(`${at} needs exactly one of apiKey and authToken`);
   if (!isRecord(env) || !Object.values(env).every((v) => typeof v === 'string')) throw new ConfigError(`${at}.env must be an object of strings`);
-  const reserved = Object.keys(env).filter((k) => THIRD_PARTY_RESERVED_ENV.includes(k));
+  const reserved = Object.keys(env).filter(isThirdPartyReservedEnv);
   if (reserved.length) throw new ConfigError(`${at}.env must not set ${reserved.join(', ')}`);
-  return { baseUrl, ...(apiKey !== undefined ? { apiKey } : { authToken: authToken as string }), env: env as Record<string, string> };
+  const credential = isNonEmptyString(apiKey) ? { apiKey } : { authToken: authToken as string };
+  return { baseUrl: baseUrl as string, ...credential, env: env as Record<string, string> };
 }
 
 export function parseChannels(raw: unknown): Record<string, ChannelConfig> {

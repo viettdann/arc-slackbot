@@ -406,6 +406,21 @@ describe('run presentation', () => {
     expect(ctx.calls.some((c) => c.method === 'reactions.add' && c.args.name === 'black_square_for_stop')).toBe(true);
   });
 
+  test.each([
+    ['first-party', false, true],
+    ['third-party', true, false],
+  ])('%s result cost visibility', async (_label, thirdParty, showsCost) => {
+    if (thirdParty) ctx.channels.replace({ [CHANNEL]: { ...ctx.channel(), thirdParty: { baseUrl: 'https://tp.example', authToken: 't', env: {} } } });
+    await ctx.controller.onAppMention({ channel: CHANNEL, user: OWNER, text: `<@${BOT}> go`, ts: '930.0' });
+    const run = ctx.runner.byChannel(CHANNEL)!;
+    ctx.queries[0]!.emit(result('the answer'));
+    ctx.queries[0]!.end();
+    await run.finished;
+    await ctx.controller.drain();
+    const posted = ctx.calls.find((c) => c.method === 'chat.postMessage' && c.args.text === 'the answer')!;
+    expect(JSON.stringify(posted.args.blocks).includes('(estimated)')).toBe(showsCost);
+  });
+
   test('long result is uploaded as result.md', async () => {
     await ctx.controller.onAppMention({ channel: CHANNEL, user: OWNER, text: `<@${BOT}> go`, ts: '920.0' });
     const run = ctx.runner.byChannel(CHANNEL)!;

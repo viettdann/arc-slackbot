@@ -164,9 +164,23 @@ describe('Runner options', () => {
   });
 
   test('thirdPartyEnv drops inherited credentials and keeps the rest', () => {
-    const base = { PATH: '/bin', CLAUDE_CODE_OAUTH_TOKEN: 'oauth', ANTHROPIC_AUTH_TOKEN: 'old', ANTHROPIC_BASE_URL: 'https://old' };
-    expect(thirdPartyEnv(base, { baseUrl: 'https://tp', apiKey: 'k', env: { X: '1' } })).toEqual({ PATH: '/bin', X: '1', ANTHROPIC_BASE_URL: 'https://tp', ANTHROPIC_API_KEY: 'k' });
+    const base = {
+      PATH: '/bin',
+      CLAUDE_CODE_OAUTH_TOKEN: 'oauth',
+      ANTHROPIC_AUTH_TOKEN: 'old',
+      ANTHROPIC_BASE_URL: 'https://old',
+      ANTHROPIC_CUSTOM_HEADERS: 'Authorization: x',
+      CLAUDE_CODE_ENTRYPOINT: 'claude-desktop',
+      CLAUDE_CODE_USE_BEDROCK: '1',
+    };
+    expect(thirdPartyEnv(base, { baseUrl: 'https://tp', apiKey: 'k', env: { X: '1', ANTHROPIC_CUSTOM_HEADERS: 'X-Tp: 1' } })).toEqual({ PATH: '/bin', X: '1', ANTHROPIC_CUSTOM_HEADERS: 'X-Tp: 1', ANTHROPIC_BASE_URL: 'https://tp', ANTHROPIC_API_KEY: 'k' });
     expect(thirdPartyEnv(base, { baseUrl: 'https://tp', authToken: 't', env: {} })).toEqual({ PATH: '/bin', ANTHROPIC_BASE_URL: 'https://tp', ANTHROPIC_AUTH_TOKEN: 't' });
+  });
+
+  test('listCommands on a third-party channel passes its env', async () => {
+    const { runner, q } = setup();
+    await runner.listCommands('C4');
+    expect(q.instances[0]!.options.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://tp.example', ANTHROPIC_AUTH_TOKEN: 'tp-token' });
   });
 
   test('third-party run records no cost', async () => {

@@ -143,11 +143,13 @@ describe('parseChannels', () => {
     expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: true } })).toThrow(/thirdParty must be an object/);
     expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { authToken: 't' } } })).toThrow(/baseUrl/);
     expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'not a url', authToken: 't' } } })).toThrow(/baseUrl/);
+    expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'javascript:alert(1)', authToken: 't' } } })).toThrow(/baseUrl/);
     expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'https://tp' } } })).toThrow(/exactly one/);
     expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'https://tp', apiKey: 'k', authToken: 't' } } })).toThrow(/exactly one/);
     expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'https://tp', apiKey: '' } } })).toThrow(/apiKey/);
     expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'https://tp', apiKey: 'k', env: { X: 1 } } } })).toThrow(/env must be an object of strings/);
     expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'https://tp', apiKey: 'k', env: { ANTHROPIC_BASE_URL: 'x' } } } })).toThrow(/must not set ANTHROPIC_BASE_URL/);
+    expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'https://tp', apiKey: 'k', env: { CLAUDE_CODE_USE_BEDROCK: '1', CLAUDE_CODE_ENTRYPOINT: 'x' } } } })).toThrow(/must not set CLAUDE_CODE_USE_BEDROCK, CLAUDE_CODE_ENTRYPOINT/);
   });
 
   test('direct key is accepted; other direct message channel IDs are rejected', () => {

@@ -338,10 +338,10 @@ export function resultPayload(
 
 export function resultFromMessage(result: SDKResultMessage): {
   text: string;
-  meta: { turns: number; durationMs: number; costUsd: number; isError: boolean };
+  meta: { turns: number; durationMs: number; isError: boolean };
 } {
   const { text, isError } = resultOutcome(result);
-  return { text, meta: { turns: result.num_turns, durationMs: result.duration_ms, costUsd: result.total_cost_usd, isError } };
+  return { text, meta: { turns: result.num_turns, durationMs: result.duration_ms, isError } };
 }
 
 const STATUS_EMOJI: Record<RunStatus, string> = {

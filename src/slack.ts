@@ -583,7 +583,8 @@ export class Controller {
     const { text, meta } = resultFromMessage(msg);
     // An interrupt makes the CLI emit an error result; Stop reports the partial text instead.
     if (run.stopReason && meta.isError) return;
-    await this.#postPayload(run, resultPayload(text, meta));
+    // The runner leaves costUsd unset when the cost must not be shown.
+    await this.#postPayload(run, resultPayload(text, { ...meta, costUsd: run.costUsd }));
   }
 
   async #postPayload(run: Run, payload: ResultPayload): Promise<void> {

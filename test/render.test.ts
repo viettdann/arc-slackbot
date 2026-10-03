@@ -318,7 +318,7 @@ describe('resultFromMessage', () => {
   const base = { type: 'result', duration_ms: 5000, duration_api_ms: 1, num_turns: 2, total_cost_usd: 0.1, is_error: false };
   test('success', () => {
     const r = resultFromMessage({ ...base, subtype: 'success', result: 'done!' } as unknown as SDKResultMessage);
-    expect(r).toEqual({ text: 'done!', meta: { turns: 2, durationMs: 5000, costUsd: 0.1, isError: false } });
+    expect(r).toEqual({ text: 'done!', meta: { turns: 2, durationMs: 5000, isError: false } });
   });
   test('error subtype', () => {
     const r = resultFromMessage({ ...base, subtype: 'error_during_execution', is_error: true, errors: ['e1', 'e2'] } as unknown as SDKResultMessage);
