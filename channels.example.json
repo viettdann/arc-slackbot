@@ -11,6 +11,15 @@
     "disallowedTools": [],
     "requireMention": false
   },
+  "C0555555555": {
+    "cwd": "/abs/path/to/third-party-project",
+    "model": "provider-model-name",
+    "thirdParty": {
+      "baseUrl": "https://provider.example/anthropic",
+      "authToken": "provider-token",
+      "env": { "ANTHROPIC_DEFAULT_HAIKU_MODEL": "provider-small-model" }
+    }
+  },
   "direct": {
     "cwd": "/abs/path/to/direct-workspace",
     "permissionMode": "default"

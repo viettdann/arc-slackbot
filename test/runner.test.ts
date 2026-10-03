@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { CanUseTool, Options, SDKMessage, SDKResultMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk';
 import { Channels } from '../src/channels.ts';
-import { BusyError, CwdMismatchError, NotConfiguredError, Runner, SessionMissingError, ShuttingDownError, type Run, type RunnerDeps } from '../src/runner.ts';
+import { BusyError, CwdMismatchError, NotConfiguredError, Runner, SessionMissingError, ShuttingDownError, thirdPartyEnv, type Run, type RunnerDeps } from '../src/runner.ts';
 import type { FinishedRun, NewRun } from '../src/store.ts';
 import type { ChannelConfig, ThreadRecord } from '../src/types.ts';
 
@@ -97,6 +97,7 @@ const CHANNELS: Record<string, ChannelConfig> = {
   C1: { cwd: '/proj/a', permissionMode: 'bypassPermissions', disallowedTools: ['AskUserQuestion'], model: 'claude-opus-5-5' },
   C2: { cwd: '/proj/b', permissionMode: 'default', disallowedTools: [] },
   C3: { cwd: '/proj/a/', permissionMode: 'default', disallowedTools: [] },
+  C4: { cwd: '/proj/c', permissionMode: 'default', disallowedTools: [], thirdParty: { baseUrl: 'https://tp.example', authToken: 'tp-token', env: { ANTHROPIC_MODEL: 'glm' } } },
 };
 
 function setup(over: Partial<RunnerDeps> = {}) {
@@ -148,6 +149,34 @@ describe('Runner options', () => {
     expect(o.permissionMode).toBe('default');
     expect('allowDangerouslySkipPermissions' in o).toBe(false);
     expect('model' in o).toBe(false);
+  });
+
+  test('first-party channel inherits the process environment', async () => {
+    const { runner, q } = setup();
+    await start(runner);
+    expect('env' in q.instances[0]!.options).toBe(false);
+  });
+
+  test('third-party channel passes its credentials and env', async () => {
+    const { runner, q } = setup();
+    await start(runner, { channelId: 'C4' });
+    expect(q.instances[0]!.options.env).toMatchObject({ ANTHROPIC_BASE_URL: 'https://tp.example', ANTHROPIC_AUTH_TOKEN: 'tp-token', ANTHROPIC_MODEL: 'glm' });
+  });
+
+  test('thirdPartyEnv drops inherited credentials and keeps the rest', () => {
+    const base = { PATH: '/bin', CLAUDE_CODE_OAUTH_TOKEN: 'oauth', ANTHROPIC_AUTH_TOKEN: 'old', ANTHROPIC_BASE_URL: 'https://old' };
+    expect(thirdPartyEnv(base, { baseUrl: 'https://tp', apiKey: 'k', env: { X: '1' } })).toEqual({ PATH: '/bin', X: '1', ANTHROPIC_BASE_URL: 'https://tp', ANTHROPIC_API_KEY: 'k' });
+    expect(thirdPartyEnv(base, { baseUrl: 'https://tp', authToken: 't', env: {} })).toEqual({ PATH: '/bin', ANTHROPIC_BASE_URL: 'https://tp', ANTHROPIC_AUTH_TOKEN: 't' });
+  });
+
+  test('third-party run records no cost', async () => {
+    const { runner, q, store } = setup();
+    const run = await start(runner, { channelId: 'C4' });
+    q.instances[0]!.out.push(result(2, 0.5));
+    q.instances[0]!.out.end();
+    await run.finished;
+    expect(run.costUsd).toBeUndefined();
+    expect(store.finishRun.mock.calls[0]![1].costUsd).toBeUndefined();
   });
 
   test('resume passes stored session id', async () => {

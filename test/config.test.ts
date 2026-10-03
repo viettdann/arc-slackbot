@@ -135,6 +135,21 @@ describe('parseChannels', () => {
     expect(() => parseChannels({ C1: { cwd: workDir, requireMention: 'no' } })).toThrow(/requireMention/);
   });
 
+  test('thirdParty is parsed and validated', () => {
+    const tp = { baseUrl: 'https://tp.example', authToken: 't', env: { ANTHROPIC_MODEL: 'glm' } };
+    expect(parseChannels({ C1: { cwd: workDir, thirdParty: tp } }).C1?.thirdParty).toEqual(tp);
+    expect(parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'https://tp.example', apiKey: 'k' } } }).C1?.thirdParty).toEqual({ baseUrl: 'https://tp.example', apiKey: 'k', env: {} });
+    expect(parseChannels({ C1: { cwd: workDir } }).C1).not.toHaveProperty('thirdParty');
+    expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: true } })).toThrow(/thirdParty must be an object/);
+    expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { authToken: 't' } } })).toThrow(/baseUrl/);
+    expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'not a url', authToken: 't' } } })).toThrow(/baseUrl/);
+    expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'https://tp' } } })).toThrow(/exactly one/);
+    expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'https://tp', apiKey: 'k', authToken: 't' } } })).toThrow(/exactly one/);
+    expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'https://tp', apiKey: '' } } })).toThrow(/apiKey/);
+    expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'https://tp', apiKey: 'k', env: { X: 1 } } } })).toThrow(/env must be an object of strings/);
+    expect(() => parseChannels({ C1: { cwd: workDir, thirdParty: { baseUrl: 'https://tp', apiKey: 'k', env: { ANTHROPIC_BASE_URL: 'x' } } } })).toThrow(/must not set ANTHROPIC_BASE_URL/);
+  });
+
   test('direct key is accepted; other direct message channel IDs are rejected', () => {
     expect(parseChannels({ direct: { cwd: workDir } }).direct?.cwd).toBe(workDir);
     expect(() => parseChannels({ D0123: { cwd: workDir } })).toThrow(/"direct" key/);

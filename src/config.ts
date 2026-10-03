@@ -2,7 +2,7 @@ import { readFileSync, statSync } from 'node:fs';
 import { isAbsolute } from 'node:path';
 import type { PermissionMode } from '@anthropic-ai/claude-agent-sdk';
 import { DIRECT_KEY, isDirectChannel } from './channels.ts';
-import { errorMessage, isRecord, type ChannelConfig, type Config } from './types.ts';
+import { errorMessage, isRecord, type ChannelConfig, type Config, type ThirdPartyConfig } from './types.ts';
 
 const PERMISSION_MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'bypassPermissions', 'plan', 'dontAsk', 'auto'];
 
@@ -18,13 +18,32 @@ function isDirectory(path: string): boolean {
   }
 }
 
+/** Variables the named thirdParty fields own, or that would send the Claude subscription token to the third-party host. */
+export const THIRD_PARTY_RESERVED_ENV = ['ANTHROPIC_BASE_URL', 'ANTHROPIC_API_KEY', 'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN'];
+
+const isNonEmptyString = (v: unknown): v is string => typeof v === 'string' && v !== '';
+
+function parseThirdParty(channelId: string, raw: unknown): ThirdPartyConfig {
+  const at = `channel ${channelId}: thirdParty`;
+  if (!isRecord(raw)) throw new ConfigError(`${at} must be an object`);
+  const { baseUrl, apiKey, authToken, env = {} } = raw;
+  if (!isNonEmptyString(baseUrl) || !URL.canParse(baseUrl)) throw new ConfigError(`${at}.baseUrl must be a URL`);
+  if (apiKey !== undefined && !isNonEmptyString(apiKey)) throw new ConfigError(`${at}.apiKey must be a non-empty string`);
+  if (authToken !== undefined && !isNonEmptyString(authToken)) throw new ConfigError(`${at}.authToken must be a non-empty string`);
+  if ((apiKey === undefined) === (authToken === undefined)) throw new ConfigError(`${at} needs exactly one of apiKey and authToken`);
+  if (!isRecord(env) || !Object.values(env).every((v) => typeof v === 'string')) throw new ConfigError(`${at}.env must be an object of strings`);
+  const reserved = Object.keys(env).filter((k) => THIRD_PARTY_RESERVED_ENV.includes(k));
+  if (reserved.length) throw new ConfigError(`${at}.env must not set ${reserved.join(', ')}`);
+  return { baseUrl, ...(apiKey !== undefined ? { apiKey } : { authToken: authToken as string }), env: env as Record<string, string> };
+}
+
 export function parseChannels(raw: unknown): Record<string, ChannelConfig> {
   if (!isRecord(raw)) throw new ConfigError('channels file must contain a JSON object keyed by channel ID');
   const channels: Record<string, ChannelConfig> = {};
   for (const [channelId, entry] of Object.entries(raw)) {
     if (channelId !== DIRECT_KEY && isDirectChannel(channelId)) throw new ConfigError(`channel ${channelId}: direct message channels are configured with the "${DIRECT_KEY}" key`);
     if (!isRecord(entry)) throw new ConfigError(`channel ${channelId}: entry must be an object`);
-    const { cwd, permissionMode = 'bypassPermissions', disallowedTools = [], model, requireMention = true } = entry;
+    const { cwd, permissionMode = 'bypassPermissions', disallowedTools = [], model, requireMention = true, thirdParty } = entry;
     if (typeof cwd !== 'string' || cwd === '') throw new ConfigError(`channel ${channelId}: cwd is required`);
     if (!isAbsolute(cwd)) throw new ConfigError(`channel ${channelId}: cwd must be an absolute path`);
     if (!isDirectory(cwd)) throw new ConfigError(`channel ${channelId}: cwd ${cwd} is not an existing directory`);
@@ -44,6 +63,7 @@ export function parseChannels(raw: unknown): Record<string, ChannelConfig> {
       disallowedTools: disallowedTools as string[],
       ...(model !== undefined ? { model: model as string } : {}),
       ...(requireMention ? {} : { requireMention: false as const }),
+      ...(thirdParty !== undefined ? { thirdParty: parseThirdParty(channelId, thirdParty) } : {}),
     };
   }
   return channels;

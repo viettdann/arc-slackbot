@@ -4,9 +4,10 @@ import { realpathSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { getSessionInfo, query, type CanUseTool, type Options, type Query, type SDKMessage, type SDKResultMessage, type SlashCommand } from '@anthropic-ai/claude-agent-sdk';
 import type { Channels } from './channels.ts';
+import { THIRD_PARTY_RESERVED_ENV } from './config.ts';
 import { InputQueue } from './input-queue.ts';
 import type { Store } from './store.ts';
-import { appendProgress, errorMessage, isStopStatus, resultOutcome, type ChannelConfig, type FinalStatus, type ProgressEntry, type RunSnapshot, type StopReason } from './types.ts';
+import { appendProgress, errorMessage, isStopStatus, resultOutcome, type ChannelConfig, type FinalStatus, type ProgressEntry, type RunSnapshot, type StopReason, type ThirdPartyConfig } from './types.ts';
 
 export class NotConfiguredError extends Error {
   override name = 'NotConfiguredError';
@@ -102,6 +103,20 @@ interface RunState {
   thrownError?: string;
   finalized: boolean;
   stopping?: Promise<void>;
+  /** The CLI prices third-party tokens at Anthropic rates, so the figure would be wrong. */
+  hideCost: boolean;
+}
+
+/** Options.env replaces the CLI environment, so the bot's own environment is inherited minus every credential. */
+export function thirdPartyEnv(base: Record<string, string | undefined>, tp: ThirdPartyConfig): Record<string, string | undefined> {
+  const env = { ...base };
+  for (const key of THIRD_PARTY_RESERVED_ENV) delete env[key];
+  return {
+    ...env,
+    ...tp.env,
+    ANTHROPIC_BASE_URL: tp.baseUrl,
+    ...(tp.apiKey !== undefined ? { ANTHROPIC_API_KEY: tp.apiKey } : { ANTHROPIC_AUTH_TOKEN: tp.authToken }),
+  };
 }
 
 const TIMED_OUT = Symbol('timed out');
@@ -189,7 +204,7 @@ export class Runner extends EventEmitter<RunnerEvents> {
       finished,
       resultCount: 0,
     };
-    const state: RunState = { resolveFinished, folder, completedTurns: 0, liveTurns: 0, finalized: false };
+    const state: RunState = { resolveFinished, folder, completedTurns: 0, liveTurns: 0, finalized: false, hideCost: channel.thirdParty !== undefined };
     // Pushed before beforeStart so a reply injected while the status message is being posted lands after the prompt.
     run.queue.push(opts.prompt);
     this.#register(run, state);
@@ -323,6 +338,7 @@ export class Runner extends EventEmitter<RunnerEvents> {
     };
     if (channel.permissionMode === 'bypassPermissions') options.allowDangerouslySkipPermissions = true;
     if (channel.model) options.model = channel.model;
+    if (channel.thirdParty) options.env = thirdPartyEnv(process.env, channel.thirdParty);
     if (resume) options.resume = resume;
     return options;
   }
@@ -369,7 +385,7 @@ export class Runner extends EventEmitter<RunnerEvents> {
       state.completedTurns += msg.num_turns;
       state.liveTurns = 0;
       run.turns = state.completedTurns;
-      run.costUsd = msg.total_cost_usd;
+      if (!state.hideCost) run.costUsd = msg.total_cost_usd;
       const { isError, text } = resultOutcome(msg);
       // The error result an interrupt produces must not discard the partial text Stop posts.
       if (!(run.stopReason && isError)) run.pendingText = undefined;

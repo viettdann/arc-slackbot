@@ -63,8 +63,11 @@ cp channels.example.json channels.json
 | `disallowedTools` | no | `[]` |
 | `model` | no | SDK default |
 | `requireMention` | no | `true` (`false` makes every top-level message in the channel a prompt, no mention needed; ignored for `"direct"`) |
+| `thirdParty` | no | — (runs the channel against an Anthropic-compatible third-party API, see below) |
 
 The special key `"direct"` takes the same fields and enables direct messages with the bot (see Usage); other keys starting with `D` are rejected.
+
+`thirdParty` takes `baseUrl` (required), exactly one of `apiKey` (sent as `ANTHROPIC_API_KEY`) or `authToken` (sent as `ANTHROPIC_AUTH_TOKEN`), and an optional `env` object of extra variables such as `ANTHROPIC_DEFAULT_HAIKU_MODEL`. `env` must not set `ANTHROPIC_BASE_URL`, `ANTHROPIC_API_KEY`, `ANTHROPIC_AUTH_TOKEN`, or `CLAUDE_CODE_OAUTH_TOKEN`. The values go only to that channel's CLI process, which inherits the bot's environment without its Claude credentials; channels without `thirdParty` keep using the Claude login. Set `model` and the `ANTHROPIC_DEFAULT_*_MODEL` variables to model names the provider accepts. An `env` block in `~/.claude/settings.json` overrides these values, so keep `ANTHROPIC_*` out of it. Third-party runs show no cost.
 
 Startup validates every field and fails on the first invalid entry. Set `disallowedTools: ["AskUserQuestion"]` to keep the agent from asking questions in that channel.
 

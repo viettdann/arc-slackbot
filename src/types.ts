@@ -25,6 +25,14 @@ export function appendProgress(progress: ProgressEntry[], entries: ProgressEntry
 }
 export const RECENT_RUNS = 20;
 
+/** Exactly one of apiKey and authToken is set. */
+export interface ThirdPartyConfig {
+  baseUrl: string;
+  apiKey?: string;
+  authToken?: string;
+  env: Record<string, string>;
+}
+
 export interface ChannelConfig {
   cwd: string;
   permissionMode: PermissionMode;
@@ -32,6 +40,7 @@ export interface ChannelConfig {
   model?: string;
   /** Stored only when false; top-level messages then start runs without a mention. */
   requireMention?: false;
+  thirdParty?: ThirdPartyConfig;
 }
 
 export interface Config {
